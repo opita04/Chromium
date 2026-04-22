@@ -1,0 +1,74 @@
+{
+  "manifest_version": 3,
+  "name": "YouTube Transcript AI Analyzer",
+  "version": "1.0",
+  "description": "Extracts YouTube transcripts, formats them, and sends to AI platforms.",
+  "permissions": [
+    "storage",
+    "scripting",
+    "tabs",
+    "clipboardWrite"
+  ],
+  "host_permissions": [
+    "https://www.youtube.com/*",
+    "https://chat.openai.com/*",
+    "https://chatgpt.com/*",
+    "https://claude.ai/*",
+    "https://gemini.google.com/*",
+    "https://chat.mistral.ai/*",
+    "https://grok.com/*",
+    "https://chat.deepseek.com/*"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "content_scripts": [
+    {
+      "matches": ["https://www.youtube.com/*"],
+      "js": ["youtube_content_script.js"]
+    },
+    {
+      "matches": ["https://chat.openai.com/*"],
+      "js": ["ai_content_script.js"]
+    },
+    {
+      "matches": ["https://chatgpt.com/*"],
+      "js": ["ai_content_script.js"]
+    },
+    {
+      "matches": ["https://claude.ai/*"],
+      "js": ["ai_content_script.js"]
+    },
+    {
+      "matches": ["https://gemini.google.com/*"],
+      "js": ["ai_content_script.js"]
+    },
+    {
+      "matches": ["https://chat.mistral.ai/*"],
+      "js": ["ai_content_script.js"]
+    },
+    {
+      "matches": ["https://grok.com/*"],
+      "js": ["ai_content_script.js"]
+    },
+      {
+        "matches": ["https://chat.deepseek.com/*"],
+        "js": ["ai_content_script.js"]
+      }
+  ],
+  "icons": {
+    "16": "icon2.png",
+    "32": "icon2.png",
+    "48": "icon2.png",
+    "128": "icon2.png"
+  },
+  "web_accessible_resources": [
+    {
+      "resources": [
+        "images/*.svg",
+        "images/*.png"
+      ],
+      "matches": ["<all_urls>"]
+    }
+  ]
+} 

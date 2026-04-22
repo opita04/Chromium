@@ -1,0 +1,29 @@
+{
+  "manifest_version": 3,
+  "name": "Mark Watched YouTube Videos",
+  "description": "Marks, hides, dims watched videos & shorts on YouTube (ported from TamperMonkey).",
+  "version": "1.4.63",
+  "permissions": [
+    "storage",
+    "activeTab",
+    "downloads"
+  ],
+  "host_permissions": [
+    "*://www.youtube.com/*"
+  ],
+  "background": {
+    "service_worker": "src/background.js"
+  },
+  "content_scripts": [
+    {
+      "matches": ["*://www.youtube.com/*"],
+      "js": ["src/content.js"],
+      "run_at": "document_end"
+    }
+  ],
+  "icons": {
+    "16": "icon.png",
+    "48": "icon.png",
+    "128": "icon.png"
+  }
+}

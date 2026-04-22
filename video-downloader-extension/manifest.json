@@ -1,0 +1,53 @@
+{
+  "manifest_version": 3,
+  "name": "Skool Video Downloader",
+  "version": "1.3.3",
+  "description": "Download Skool videos to your computer for offline viewing.",
+  "permissions": ["storage", "tabs"],
+  "host_permissions": ["https://*.skool.com/*"],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "action": {
+    "default_popup": "popup.html",
+    "default_icon": {
+      "16": "icon16.png",
+      "48": "icon48.png",
+      "128": "icon128.png"
+    }
+  },
+  "content_scripts": [
+    {
+      "matches": ["https://www.skool.com/*"],
+      "js": [
+        "js/utils.js",
+        "js/providers/baseProvider.js",
+        "js/providers/youtubeProvider.js",
+        "js/providers/loomProvider.js",
+        "js/providers/vimeoProvider.js",
+        "js/providers/wistiaProvider.js",
+        "js/providers/skoolProvider.js",
+        "js/providerRegistry.js",
+        "js/locationDetectors.js",
+        "js/videoDetection.js",
+        "js/classroomVideo.js",
+        "js/dynamicDetection.js",
+        "js/modal-v2.js",
+        "js/content-main-v2.js",
+        "js/content-init.js"
+      ],
+      "css": ["styles.css"]
+    }
+  ],
+  "icons": {
+    "16": "icon16.png",
+    "48": "icon48.png",
+    "128": "icon128.png"
+  },
+  "web_accessible_resources": [
+    {
+      "resources": ["styles.css"],
+      "matches": ["https://*.skool.com/*"]
+    }
+  ]
+}

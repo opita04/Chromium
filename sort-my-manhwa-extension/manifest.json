@@ -1,0 +1,20 @@
+{
+  "manifest_version": 3,
+  "name": "ThunderScans Sorter",
+  "version": "1.0",
+  "description": "Sort comics by rating, title, and more on ThunderScans.",
+  "permissions": ["activeTab"],
+  "action": {
+    "default_popup": "popup.html"
+  },
+  "content_scripts": [
+    {
+      "matches": ["https://en-thunderscans.com/comics/*", "https://en-thunderscans.com/manga/*"],
+      "js": ["content.js"],
+      "css": ["content.css"]
+    }
+  ],
+  "icons": {
+    "48": "icon.png"
+  }
+}

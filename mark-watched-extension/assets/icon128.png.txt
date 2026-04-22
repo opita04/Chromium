@@ -1,0 +1,11 @@
+PLACEHOLDER FOR ICON128.PNG
+================================
+
+This should be replaced with a 128x128 pixel PNG icon for the Chrome extension.
+
+For now, we'll use a simple data URL icon in the manifest to avoid loading errors.
+
+The icon should represent the "Mark Watched Videos" functionality - perhaps:
+- An eye with a checkmark
+- A video player with a green overlay
+- YouTube logo with a watch indicator
