@@ -30,7 +30,7 @@ def test_extension():
             page.on("pageerror", lambda err: log(f"PAGE ERROR: {err}"))
             
             log("Navigating to YouTube...")
-            page.goto("https://www.youtube.com", wait_until="networkidle", timeout=60000)
+            page.goto("https://www.youtube.com/results?search_query=programming", wait_until="networkidle", timeout=60000)
             
             log("Waiting 5 seconds for extension to run...")
             page.wait_for_timeout(5000)
