@@ -37,75 +37,34 @@
   }
 
   function processVideoItems(selector) {
-    var items = document.querySelectorAll(selector), i, link;
-    console.log('Processing video items with selector: ' + selector + ', found: ' + items.length);
-    var watchedCount = 0;
+    var items = document.querySelectorAll(selector), i;
     for (i = items.length - 1; i >= 0; i--) {
-      if (link = querySelector.call(items[i], "A")) {
-        var videoId = getVideoId(link.href);
-        if (videoId && watched(videoId)) {
-          items[i].classList.add("watched");
-          watchedCount++;
-        } else items[i].classList.remove("watched");
+      var videoId = extractVideoIdFromContainer(items[i]);
+      if (videoId && watched(videoId)) {
+        items[i].classList.add("watched");
+      } else {
+        items[i].classList.remove("watched");
       }
     }
-    console.log('Marked ' + watchedCount + ' videos as watched for selector: ' + selector);
   }
 
   function processAllVideoItems() {
-    //home page
-    processVideoItems(`.yt-uix-shelfslider-list>.yt-shelf-grid-item`);
     processVideoItems(`
-#contents.ytd-rich-grid-renderer>ytd-rich-item-renderer,
-#contents.ytd-rich-shelf-renderer ytd-rich-item-renderer.ytd-rich-shelf-renderer,
-#contents.ytd-rich-grid-renderer>ytd-rich-grid-row ytd-rich-grid-media`);
-    //subscriptions page
-    processVideoItems(`.multirow-shelf>.shelf-content>.yt-shelf-grid-item`);
-    //modern subscriptions page
-    processVideoItems(`#contents ytd-rich-item-renderer, #contents ytd-video-renderer, ytd-rich-grid-renderer ytd-rich-item-renderer`);
-    //history:watch page
-    processVideoItems(`ytd-section-list-renderer[page-subtype="history"] .ytd-item-section-renderer>ytd-video-renderer`);
-    //channel/user home page
-    processVideoItems(`
-#contents>.ytd-item-section-renderer>.ytd-newspaper-renderer,
-#items>.yt-horizontal-list-renderer`); //old
-    processVideoItems(`
-#contents>.ytd-channel-featured-content-renderer,
-#contents>.ytd-shelf-renderer>#grid-container>.ytd-expanded-shelf-contents-renderer`); //new
-    //channel/user video page
-    processVideoItems(`
-#contents>.ytd-item-section-renderer>.ytd-newspaper-renderer,
-#items>.yt-horizontal-list-renderer`);
-    //channel/user shorts page
-    processVideoItems(`
-ytd-rich-item-renderer ytd-rich-grid-slim-media`);
-    //channel/user playlist page
-    processVideoItems(`
-.expanded-shelf>.expanded-shelf-content-list>.expanded-shelf-content-item-wrapper,
-.ytd-playlist-video-renderer`);
-    //channel/user playlist item page
-    processVideoItems(`
-.pl-video-list .pl-video-table .pl-video,
-ytd-playlist-panel-video-renderer`);
-    //channel/user search page
-    if (/^\/(?:(?:c|channel|user)\/)?.+?\/search/.test(location.pathname)) {
-      processVideoItems(`.ytd-browse #contents>.ytd-item-section-renderer`); //new
-    }
-    //search page
-    processVideoItems(`
-#results>.section-list .item-section>li,
-#browse-items-primary>.browse-list-item-container`); //old
-    processVideoItems(`
-.ytd-search #contents>ytd-video-renderer,
-.ytd-search #contents>ytd-playlist-renderer,
-.ytd-search #items>ytd-video-renderer`); //new
-    //video page
-    processVideoItems(`
-.watch-sidebar-body>.video-list>.video-list-item,
-.playlist-videos-container>.playlist-videos-list>li`); //old
-    processVideoItems(`
-.ytd-compact-video-renderer,
-.ytd-compact-radio-renderer`); //new
+      ytd-rich-item-renderer,
+      ytd-video-renderer,
+      ytd-grid-video-renderer,
+      ytd-compact-video-renderer,
+      ytd-playlist-video-renderer,
+      ytd-playlist-panel-video-renderer,
+      ytd-reel-item-renderer,
+      ytd-rich-grid-media,
+      .yt-shelf-grid-item,
+      .video-list-item,
+      .ytd-newspaper-renderer,
+      .browse-list-item-container,
+      .ytd-channel-featured-content-renderer,
+      .pl-video
+    `);
   }
 
   async function addHistory(vid, time, noSave, i) {
@@ -678,8 +637,13 @@ History data size: ${JSON.stringify(watchedVideos).length} bytes\
   function extractVideoIdFromContainer(container) {
     if (!container) return null;
     // Try finding an anchor with a video URL
-    const link = container.querySelector('a[href*="/watch?"], a[href*="/shorts/"]');
-    if (link) return getVideoId(link.href);
+    const link = container.querySelector('a#thumbnail[href*="/watch?"], a#thumbnail[href*="/shorts/"], a.ytd-thumbnail[href*="/watch?"], a.ytd-thumbnail[href*="/shorts/"]');
+    if (link && link.href) return getVideoId(link.href);
+    
+    // Fallback to any anchor if no thumbnail anchor is found
+    const fallbackLink = container.querySelector('a[href*="/watch?"], a[href*="/shorts/"]');
+    if (fallbackLink && fallbackLink.href) return getVideoId(fallbackLink.href);
+
     // Try YT data model
     let el = container;
     while (el) {
