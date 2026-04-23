@@ -40,6 +40,9 @@
     var items = document.querySelectorAll(selector), i;
     for (i = items.length - 1; i >= 0; i--) {
       var videoId = extractVideoIdFromContainer(items[i]);
+      if (!videoId) {
+        // console.log('[MWYV] Missing videoId for item', items[i]);
+      }
       if (videoId && watched(videoId)) {
         items[i].classList.add("watched");
       } else {
@@ -912,6 +915,7 @@ History data size: ${JSON.stringify(watchedVideos).length} bytes\
     updateClassOnWatchedItems(); // sync — safe to call directly
     updateClassOnShortsItems();
     renderMWYVButtons();
+    autoImportWatchedFromProgressBars().catch(console.error);
   }, 250);
 
   // --- observeDOM function (from Hide_and_Dim) ---
@@ -922,23 +926,26 @@ History data size: ${JSON.stringify(watchedVideos).length} bytes\
       if (!obj) return;
       if (MutationObserver) {
         const obs = new MutationObserver((mutations, _observer) => {
-          if (
-            mutations.length === 1 &&
-            mutations[0].addedNodes?.length === 1 &&
-            mutations[0].addedNodes[0] &&
-            mutations[0].addedNodes[0].classList &&
-            mutations[0].addedNodes[0].classList.contains('YT-HWV-BUTTONS')
-          ) {
-            return;
+          let shouldUpdate = false;
+          for (let m of mutations) {
+            // Ignore mutations on our own buttons to prevent infinite loops
+            if (m.target && m.target.classList && (m.target.classList.contains('YT-HWV-BUTTONS') || m.target.classList.contains('YT-HWV-BUTTON') || m.target.classList.contains('YT-HWV-BUTTON-SHORTS'))) {
+              continue;
+            }
+            if (m.type === 'childList' && (m.addedNodes.length > 0 || m.removedNodes.length > 0)) {
+              shouldUpdate = true;
+              break;
+            }
+            if (m.type === 'attributes' && m.attributeName === 'href') {
+              shouldUpdate = true;
+              break;
+            }
           }
-          if (
-            mutations[0].addedNodes.length ||
-            mutations[0].removedNodes.length
-          ) {
+          if (shouldUpdate) {
             callback(mutations);
           }
         });
-        obs.observe(obj, { childList: true, subtree: true });
+        obs.observe(obj, { childList: true, subtree: true, attributes: true, attributeFilter: ['href'] });
       } else if (eventListenerSupported) {
         obj.addEventListener('DOMNodeInserted', callback, false);
         obj.addEventListener('DOMNodeRemoved', callback, false);
