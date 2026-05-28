@@ -1,0 +1,32 @@
+{
+  "name": "nyaa-auto-download-extension",
+  "version": "1.0.0",
+  "description": "Automatically track and download anime episodes from Nyaa.si",
+  "main": "manifest.json",
+  "scripts": {
+    "build": "node build.js",
+    "dev": "echo 'Load the extension folder in Chrome/Edge developer mode'",
+    "package": "npm run build"
+  },
+  "keywords": [
+    "anime",
+    "torrent",
+    "download",
+    "nyaa",
+    "browser-extension",
+    "chrome-extension"
+  ],
+  "author": "Nyaa Auto Download Team",
+  "license": "MIT",
+  "devDependencies": {
+    "archiver": "^5.3.1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/opita04/Nyaa-Auto-Download"
+  },
+  "bugs": {
+    "url": "https://github.com/opita04/Nyaa-Auto-Download/issues"
+  },
+  "homepage": "https://github.com/opita04/Nyaa-Auto-Download#readme"
+}

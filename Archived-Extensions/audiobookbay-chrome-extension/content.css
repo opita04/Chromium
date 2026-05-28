@@ -1,0 +1,172 @@
+/* Additional content styling that can be loaded separately */
+
+/* Ensure our extension elements have proper z-index layering */
+.abb-floating-search {
+    z-index: 2147483647 !important; /* Maximum z-index */
+}
+
+.abb-modal {
+    z-index: 2147483646 !important;
+}
+
+.abb-notification {
+    z-index: 2147483645 !important;
+}
+
+.abb-detail-download {
+    z-index: 2147483644 !important;
+}
+
+/* Responsive adjustments */
+@media (max-width: 768px) {
+    .abb-search-panel {
+        width: 280px;
+        right: -10px;
+    }
+    
+    .abb-floating-search {
+        bottom: 10px;
+        right: 10px;
+    }
+    
+    .abb-detail-download {
+        top: 10px;
+        right: 10px;
+        padding: 8px 12px;
+        font-size: 12px;
+    }
+    
+    .abb-extension-controls {
+        padding: 8px;
+    }
+    
+    .abb-download-btn, .abb-preview-btn {
+        padding: 6px 10px;
+        font-size: 11px;
+    }
+    
+    .abb-modal-content {
+        width: 95%;
+        margin: 10px;
+    }
+    
+    .abb-bulk-controls {
+        padding: 10px;
+        font-size: 12px;
+    }
+    
+    .abb-notification {
+        left: 10px;
+        right: 10px;
+        transform: none;
+        max-width: calc(100% - 20px);
+    }
+}
+
+@media (max-width: 480px) {
+    .abb-search-panel {
+        width: 250px;
+        right: -20px;
+    }
+    
+    .abb-preview-actions {
+        flex-direction: column;
+    }
+    
+    .abb-bulk-controls {
+        flex-direction: column;
+        align-items: flex-start;
+    }
+    
+    .abb-selected-count {
+        margin-left: 0;
+        margin-top: 5px;
+    }
+}
+
+/* High contrast mode support */
+@media (prefers-contrast: high) {
+    .abb-extension-controls {
+        border: 2px solid #000;
+        background: #fff;
+    }
+    
+    .abb-download-btn, .abb-preview-btn, .abb-bulk-btn {
+        border: 1px solid #000;
+    }
+    
+    .abb-quality-indicator {
+        border: 1px solid #000;
+    }
+}
+
+/* Dark mode adjustments */
+@media (prefers-color-scheme: dark) {
+    .abb-search-panel {
+        background: #2d2d2d;
+        border: 1px solid #555;
+    }
+    
+    .abb-search-input {
+        background: #333;
+        color: #fff;
+        border-color: #555;
+    }
+    
+    .abb-modal-content {
+        background: #2d2d2d;
+        color: #fff;
+    }
+    
+    .abb-bulk-controls {
+        background: #333;
+        color: #fff;
+    }
+}
+
+/* Animation refinements */
+.abb-download-btn:disabled {
+    opacity: 0.7;
+    cursor: not-allowed;
+}
+
+.abb-search-toggle:active {
+    transform: scale(0.95);
+}
+
+/* Focus styles for accessibility */
+.abb-download-btn:focus,
+.abb-preview-btn:focus,
+.abb-bulk-btn:focus,
+.abb-search-submit:focus {
+    outline: 2px solid #fff;
+    outline-offset: 2px;
+}
+
+.abb-search-input:focus {
+    outline: 2px solid #6a1b9a;
+    outline-offset: -2px;
+}
+
+/* Hover effects */
+.abb-extension-controls:hover {
+    background: rgba(106, 27, 154, 0.15);
+    transition: background 0.3s ease;
+}
+
+.abb-quality-indicator:hover {
+    transform: scale(1.05);
+    transition: transform 0.2s ease;
+}
+
+/* Print styles */
+@media print {
+    .abb-floating-search,
+    .abb-modal,
+    .abb-notification,
+    .abb-detail-download,
+    .abb-extension-controls,
+    .abb-bulk-controls {
+        display: none !important;
+    }
+}

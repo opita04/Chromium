@@ -1,0 +1,101 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Nyaa Auto Download</title>
+    <link rel="icon" type="image/png" sizes="32x32" href="../icons/icon-32.png">
+    <link rel="icon" type="image/png" sizes="16x16" href="../icons/icon-16.png">
+    <link rel="stylesheet" href="popup.css">
+</head>
+<body>
+    <div class="popup-container">
+        <!-- Header -->
+        <div class="header">
+            <div class="logo">
+                <span class="icon">🎬</span>
+                <h1>Nyaa Auto Download</h1>
+            </div>
+            <div class="status-indicator" id="statusIndicator">
+                <span class="status-dot"></span>
+                <span class="status-text">Active</span>
+            </div>
+        </div>
+
+        <!-- Quick Stats -->
+        <div class="stats-section">
+            <div class="stat-item">
+                <span class="stat-number" id="trackedCount">0</span>
+                <span class="stat-label">Tracked</span>
+            </div>
+            <div class="stat-item">
+                <span class="stat-number" id="newEpisodesCount">0</span>
+                <span class="stat-label">New Episodes</span>
+            </div>
+            <div class="stat-item">
+                <span class="stat-number" id="lastCheckTime">--:--</span>
+                <span class="stat-label">Last Check</span>
+            </div>
+        </div>
+
+        <!-- Tracked Anime List -->
+        <div class="anime-section">
+            <div class="section-header">
+                <h2>Tracked Anime</h2>
+                <div class="section-actions">
+                    <button class="btn btn-small" id="sortByDayBtn" title="Sort by category">📅 Sort</button>
+                    <button class="btn btn-small" id="checkNowBtn">Check Now</button>
+                </div>
+            </div>
+            
+            <div class="anime-list" id="animeList">
+                <div class="empty-state">
+                    <span class="empty-icon">📺</span>
+                    <p>No anime being tracked</p>
+                    <small>Visit Nyaa.si and click "Track" on anime you want to monitor</small>
+                </div>
+            </div>
+        </div>
+
+        <!-- New Episodes Section -->
+        <div class="episodes-section" id="episodesSection" style="display: none;">
+            <div class="section-header">
+                <h2>New Episodes</h2>
+                <button class="btn btn-small" id="clearEpisodesBtn">Clear All</button>
+            </div>
+            
+            <div class="episodes-list" id="episodesList">
+                <!-- Episodes will be populated here -->
+            </div>
+        </div>
+
+        <!-- Quick Actions -->
+        <div class="actions-section">
+            <button class="btn btn-primary" id="openNyaaBtn">
+                <span class="btn-icon">🔍</span>
+                Open Nyaa.si
+            </button>
+            <button class="btn btn-secondary" id="openAllBtn" style="display: none;">
+                <span class="btn-icon">📂</span>
+                Open All
+            </button>
+            <button class="btn btn-secondary" id="settingsBtn">
+                <span class="btn-icon">⚙️</span>
+                Settings
+            </button>
+
+        </div>
+
+        <!-- Footer -->
+        <div class="footer">
+            <div class="footer-links">
+                <a href="#" id="helpLink">Help</a>
+                <a href="#" id="aboutLink">About</a>
+            </div>
+            <div class="version">v1.0.0</div>
+        </div>
+    </div>
+
+    <script src="popup.js"></script>
+</body>
+</html>

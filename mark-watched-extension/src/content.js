@@ -526,12 +526,18 @@ History data size: ${JSON.stringify(watchedVideos).length} bytes\
       .YT-HWV-SHORTS-DIMMED { opacity: 0.3 !important; }
       .YT-HWV-HIDDEN-ROW-PARENT { padding-bottom: 10px !important; }
       .YT-HWV-BUTTONS {
+        align-items: center !important;
         background: transparent !important;
         border: 1px solid var(--ytd-searchbox-legacy-border-color, rgba(255,255,255,0.2)) !important;
         border-radius: 40px !important;
         display: flex !important;
         gap: 5px !important;
         margin: 0 20px !important;
+      }
+      .YT-HWV-BUTTONS-COLLAPSED {
+        gap: 0 !important;
+        margin-left: 8px !important;
+        margin-right: 8px !important;
       }
       .YT-HWV-BUTTON {
         align-items: center !important;
@@ -545,6 +551,11 @@ History data size: ${JSON.stringify(watchedVideos).length} bytes\
         justify-content: center !important;
         outline: 0 !important;
         width: 40px !important;
+      }
+      .YT-HWV-BUTTON svg {
+        height: 24px !important;
+        pointer-events: none !important;
+        width: 24px !important;
       }
       .YT-HWV-BUTTON:focus,
       .YT-HWV-BUTTON:hover {
@@ -561,6 +572,7 @@ History data size: ${JSON.stringify(watchedVideos).length} bytes\
   // --- Settings storage and default ---
   const THRESHOLD_KEY = 'MWYV_HIDDEN_THRESHOLD_PERCENT';
   const AUTO_IMPORT_KEY = 'MWYV_AUTO_IMPORT_PROGRESS';
+  const COLLAPSED_KEY = 'MWYV_BUTTONS_COLLAPSED';
   function getThreshold() {
     let v = localStorage.getItem(THRESHOLD_KEY);
     v = v === null ? 10 : parseInt(v, 10);
@@ -576,6 +588,12 @@ History data size: ${JSON.stringify(watchedVideos).length} bytes\
   }
   function setAutoImport(v) {
     localStorage.setItem(AUTO_IMPORT_KEY, v ? 'true' : 'false');
+  }
+  function getButtonsCollapsed() {
+    return localStorage.getItem(COLLAPSED_KEY) === 'true';
+  }
+  function setButtonsCollapsed(v) {
+    localStorage.setItem(COLLAPSED_KEY, v ? 'true' : 'false');
   }
 
   // --- Watched video detection using multiple YouTube signals ---
@@ -779,6 +797,9 @@ History data size: ${JSON.stringify(watchedVideos).length} bytes\
     }
   ];
 
+  const MWYV_COLLAPSE_ICON = '<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 48 48"><path fill="currentColor" d="M26 14 16 24l10 10 2.83-2.83L21.66 24l7.17-7.17L26 14zm10 0L26 24l10 10 2.83-2.83L31.66 24l7.17-7.17L36 14z"/></svg>';
+  const MWYV_COMPACT_ICON = '<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 48 48"><path fill="currentColor" d="M24 9C14 9 5.46 15.22 2 24c3.46 8.78 12 15 22 15 10.01 0 18.54-6.22 22-15C42.54 15.22 34.01 9 24 9zm0 25c-5.52 0-10-4.48-10-10s4.48-10 10-10 10 4.48 10 10-4.48 10-10 10zm0-16c-3.31 0-6 2.69-6 6s2.69 6 6 6 6-2.69 6-6-2.69-6-6-6z"/></svg>';
+
   // --- Trusted Types policy for YouTube header injection ---
   let trustedPolicy = null;
   if (window.trustedTypes && window.trustedTypes.createPolicy) {
@@ -801,62 +822,86 @@ History data size: ${JSON.stringify(watchedVideos).length} bytes\
     // Generate buttons area DOM
     const buttonArea = document.createElement('div');
     buttonArea.classList.add('YT-HWV-BUTTONS');
-    MWYV_BUTTONS.forEach(({ icon, iconHidden, name, stateKey, type }) => {
-      const section = determineYoutubeSection();
-      const storageKey = [stateKey, section].join('_');
-      const toggleButtonState = localStorage.getItem(storageKey) || 'normal';
-      const button = document.createElement('button');
-      button.title = type === 'toggle' ? `${name} : currently "${toggleButtonState}" for section "${section}"` : `${name}`;
-      button.classList.add('YT-HWV-BUTTON');
-      if (toggleButtonState !== 'normal') button.classList.add('YT-HWV-BUTTON-DISABLED');
-      // Use Trusted Types for innerHTML
-      const iconHTML = toggleButtonState === 'hidden' ? iconHidden : icon;
-      button.innerHTML = trustedPolicy ? trustedPolicy.createHTML(iconHTML) : iconHTML;
-      buttonArea.appendChild(button);
-      switch (type) {
-        case 'toggle':
-          button.addEventListener('click', () => {
-            let newState = 'dimmed';
-            if (toggleButtonState === 'dimmed') newState = 'hidden';
-            else if (toggleButtonState === 'hidden') newState = 'normal';
-            localStorage.setItem(storageKey, newState);
-            // Process all video items first to ensure watched status is up to date
-            processAllVideoItems();
-            updateClassOnWatchedItems();
-            updateClassOnShortsItems();
-            renderMWYVButtons();
-          });
-          // Add tooltip functionality
-          if (MWYV_BUTTONS.find(b => b.stateKey === stateKey)?.tooltip) {
-            setupTooltip(button, MWYV_BUTTONS.find(b => b.stateKey === stateKey).tooltip);
-          }
-          break;
-        case 'settings':
-          button.addEventListener('click', () => {
-            showSettingsMenu();
-          });
-          // Add tooltip functionality
-          if (MWYV_BUTTONS.find(b => b.type === 'settings')?.tooltip) {
-            setupTooltip(button, MWYV_BUTTONS.find(b => b.type === 'settings').tooltip);
-          }
-          break;
-        case 'stats':
-          button.addEventListener('click', () => {
-            displayHistoryStats().catch(console.error);
-          });
-          break;
-        case 'backup':
-          button.addEventListener('click', () => {
-            backupHistoryData().catch(console.error);
-          });
-          break;
-        case 'restore':
-          button.addEventListener('click', () => {
-            restoreHistoryData().catch(console.error);
-          });
-          break;
-      }
-    });
+    if (getButtonsCollapsed()) {
+      buttonArea.classList.add('YT-HWV-BUTTONS-COLLAPSED');
+      const expandButton = document.createElement('button');
+      expandButton.title = 'Show Mark Watched controls';
+      expandButton.classList.add('YT-HWV-BUTTON');
+      expandButton.innerHTML = trustedPolicy ? trustedPolicy.createHTML(MWYV_COMPACT_ICON) : MWYV_COMPACT_ICON;
+      expandButton.addEventListener('click', () => {
+        setButtonsCollapsed(false);
+        renderMWYVButtons();
+      });
+      setupTooltip(expandButton, 'Show Mark Watched controls');
+      buttonArea.appendChild(expandButton);
+    } else {
+      MWYV_BUTTONS.forEach(({ icon, iconHidden, name, stateKey, type }) => {
+        const section = determineYoutubeSection();
+        const storageKey = [stateKey, section].join('_');
+        const toggleButtonState = localStorage.getItem(storageKey) || 'normal';
+        const button = document.createElement('button');
+        button.title = type === 'toggle' ? `${name} : currently "${toggleButtonState}" for section "${section}"` : `${name}`;
+        button.classList.add('YT-HWV-BUTTON');
+        if (toggleButtonState !== 'normal') button.classList.add('YT-HWV-BUTTON-DISABLED');
+        // Use Trusted Types for innerHTML
+        const iconHTML = toggleButtonState === 'hidden' ? iconHidden : icon;
+        button.innerHTML = trustedPolicy ? trustedPolicy.createHTML(iconHTML) : iconHTML;
+        buttonArea.appendChild(button);
+        switch (type) {
+          case 'toggle':
+            button.addEventListener('click', () => {
+              let newState = 'dimmed';
+              if (toggleButtonState === 'dimmed') newState = 'hidden';
+              else if (toggleButtonState === 'hidden') newState = 'normal';
+              localStorage.setItem(storageKey, newState);
+              // Process all video items first to ensure watched status is up to date
+              processAllVideoItems();
+              updateClassOnWatchedItems();
+              updateClassOnShortsItems();
+              renderMWYVButtons();
+            });
+            // Add tooltip functionality
+            if (MWYV_BUTTONS.find(b => b.stateKey === stateKey)?.tooltip) {
+              setupTooltip(button, MWYV_BUTTONS.find(b => b.stateKey === stateKey).tooltip);
+            }
+            break;
+          case 'settings':
+            button.addEventListener('click', () => {
+              showSettingsMenu();
+            });
+            // Add tooltip functionality
+            if (MWYV_BUTTONS.find(b => b.type === 'settings')?.tooltip) {
+              setupTooltip(button, MWYV_BUTTONS.find(b => b.type === 'settings').tooltip);
+            }
+            break;
+          case 'stats':
+            button.addEventListener('click', () => {
+              displayHistoryStats().catch(console.error);
+            });
+            break;
+          case 'backup':
+            button.addEventListener('click', () => {
+              backupHistoryData().catch(console.error);
+            });
+            break;
+          case 'restore':
+            button.addEventListener('click', () => {
+              restoreHistoryData().catch(console.error);
+            });
+            break;
+        }
+      });
+      const collapseButton = document.createElement('button');
+      collapseButton.title = 'Collapse Mark Watched controls';
+      collapseButton.classList.add('YT-HWV-BUTTON');
+      collapseButton.innerHTML = trustedPolicy ? trustedPolicy.createHTML(MWYV_COLLAPSE_ICON) : MWYV_COLLAPSE_ICON;
+      collapseButton.addEventListener('click', () => {
+        setButtonsCollapsed(true);
+        renderMWYVButtons();
+      });
+      setupTooltip(collapseButton, 'Collapse these controls into one button');
+      buttonArea.appendChild(collapseButton);
+    }
     if (target) {
       if (existingButtons) {
         // If the buttons exist but have a different parent, replaceChild will throw an error
@@ -1107,7 +1152,7 @@ History data size: ${JSON.stringify(watchedVideos).length} bytes\
           <button class="mwyv-button secondary" id="mwyv-backup-data">Backup History</button>
           <button class="mwyv-button secondary" id="mwyv-restore-data">Restore History</button>
         </div>
-        
+
         <div class="mwyv-setting-row">
           <div class="mwyv-setting-label">💡 Usage Tips</div>
           <div class="mwyv-setting-desc">
@@ -1175,6 +1220,7 @@ History data size: ${JSON.stringify(watchedVideos).length} bytes\
     document.getElementById('mwyv-restore-data').addEventListener('click', () => {
       restoreHistoryData().catch(console.error);
     });
+
   }
 
   // --- Attach observer and initial run (from Hide_and_Dim) ---

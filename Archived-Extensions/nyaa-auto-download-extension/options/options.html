@@ -1,0 +1,165 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Nyaa Auto Download - Settings</title>
+    <link rel="icon" type="image/png" sizes="32x32" href="../icons/icon-32.png">
+    <link rel="icon" type="image/png" sizes="16x16" href="../icons/icon-16.png">
+    <link rel="stylesheet" href="options.css">
+</head>
+<body>
+    <div class="options-container">
+        <!-- Header -->
+        <div class="header">
+            <div class="logo">
+                <span class="icon">🎬</span>
+                <h1>Nyaa Auto Download</h1>
+                <span class="version">v1.0.0</span>
+            </div>
+        </div>
+
+        <!-- Settings Form -->
+        <form class="settings-form" id="settingsForm">
+            <!-- General Settings -->
+            <div class="settings-section">
+                <h2>General Settings</h2>
+                
+                <div class="setting-item">
+                    <label for="checkInterval">Check Interval (minutes)</label>
+                    <select id="checkInterval" name="checkInterval">
+                        <option value="1">1 minute</option>
+                        <option value="5">5 minutes</option>
+                        <option value="10">10 minutes</option>
+                        <option value="15">15 minutes</option>
+                        <option value="30">30 minutes</option>
+                        <option value="60" selected>1 hour</option>
+                    </select>
+                    <small>How often to check for new episodes</small>
+                </div>
+
+                
+
+                <div class="setting-item">
+                    <label>
+                        <input type="checkbox" id="notifications" name="notifications" checked>
+                        <span class="checkbox-label">Show notifications</span>
+                    </label>
+                    <small>Display browser notifications for new episodes</small>
+                </div>
+            </div>
+
+            <!-- Download Settings -->
+            <div class="settings-section">
+                <h2>Download Settings</h2>
+                
+                <div class="setting-item">
+                    <label for="torrentClient">Torrent Client</label>
+                    <select id="torrentClient" name="torrentClient">
+                        <option value="browser" selected>Browser Download</option>
+                        <option value="clipboard">Copy to Clipboard</option>
+                        <option value="custom">Custom Command</option>
+                    </select>
+                    <small>How to handle magnet links</small>
+                </div>
+
+                <div class="setting-item" id="customCommandItem" style="display: none;">
+                    <label for="customCommand">Custom Command</label>
+                    <input type="text" id="customCommand" name="customCommand" 
+                           placeholder="e.g., transmission-remote --add {magnet}">
+                    <small>Command to run with {magnet} placeholder for the magnet link</small>
+                </div>
+
+                <div class="setting-item">
+                    <label for="qualityFilter">Quality Filter</label>
+                    <select id="qualityFilter" name="qualityFilter">
+                        <option value="all" selected>All Qualities</option>
+                        <option value="1080p">1080p Only</option>
+                        <option value="720p">720p Only</option>
+                        <option value="480p">480p Only</option>
+                        <option value="bluray">BluRay Only</option>
+                        <option value="webrip">WebRip Only</option>
+                    </select>
+                    <small>Preferred quality for downloads</small>
+                </div>
+            </div>
+
+            <!-- Advanced Settings -->
+            <div class="settings-section">
+                <h2>Advanced Settings</h2>
+
+                <div class="setting-item">
+                    <label>
+                        <input type="checkbox" id="multiEpisode" name="multiEpisode">
+                        <span class="checkbox-label">Allow multi-episode downloads</span>
+                    </label>
+                    <small>Download episodes that contain multiple episodes in one file</small>
+                </div>
+
+                <div class="setting-item">
+                    <label>
+                        <input type="checkbox" id="autoDownload" name="autoDownload">
+                        <span class="checkbox-label">Auto-download new episodes</span>
+                    </label>
+                    <small>Automatically download new episodes when the popup is opened</small>
+                </div>
+
+                <div class="setting-item">
+                    <label>
+                        <input type="checkbox" id="useDownloadQueue" name="useDownloadQueue">
+                        <span class="checkbox-label">Use download queue</span>
+                    </label>
+                    <small>Process multiple downloads sequentially to avoid rate limiting</small>
+                </div>
+
+            </div>
+
+            <!-- Data Management -->
+            <div class="settings-section">
+                <h2>Data Management</h2>
+                
+                <div class="setting-item">
+                    <label>Tracked Anime</label>
+                    <div class="data-actions">
+                        <button type="button" class="btn btn-secondary" id="exportBtn">Export Data</button>
+                        <button type="button" class="btn btn-secondary" id="importBtn">Import Data</button>
+                        <button type="button" class="btn btn-danger" id="clearBtn">Clear All Data</button>
+                    </div>
+                    <small>Manage your tracked anime and settings</small>
+                </div>
+
+                <div class="setting-item">
+                    <label>Storage Usage</label>
+                    <div class="storage-info">
+                        <span id="storageUsed">Calculating...</span>
+                    </div>
+                    <small>Extension storage usage</small>
+                </div>
+            </div>
+
+            <!-- Save Button -->
+            <div class="form-actions">
+                <button type="submit" class="btn btn-primary">Save Settings</button>
+                <button type="button" class="btn btn-secondary" id="resetBtn">Reset to Defaults</button>
+            </div>
+        </form>
+
+        <!-- Footer -->
+        <div class="footer">
+            <div class="footer-links">
+                <a href="#" id="helpLink">Help & Documentation</a>
+                <a href="#" id="githubLink">GitHub Repository</a>
+                <a href="#" id="reportLink">Report Issue</a>
+            </div>
+            <div class="footer-text">
+                Made with ❤️ for anime fans
+            </div>
+        </div>
+    </div>
+
+    <!-- Hidden file input for import -->
+    <input type="file" id="importFile" accept=".json" style="display: none;">
+
+    <script src="options.js"></script>
+</body>
+</html>

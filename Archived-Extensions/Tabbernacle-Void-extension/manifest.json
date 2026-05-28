@@ -1,0 +1,31 @@
+{
+  "manifest_version": 3,
+  "name": "Tabbernacle Void",
+  "version": "0.1.0",
+  "description": "A New Tab Page Replacement for session and bookmark management.",
+  "icons": {
+    "16": "icons/icon16.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  },
+  "permissions": [
+    "storage",
+    "tabs",
+    "contextMenus",
+    "notifications",
+    "alarms"
+  ],
+  "host_permissions": [
+    "<all_urls>"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "action": {
+    "default_popup": "popup.html"
+  },
+  "options_page": "options.html",
+  "chrome_url_overrides": {
+    "newtab": "index.html"
+  }
+}

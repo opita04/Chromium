@@ -1,0 +1,178 @@
+/* Content script styles for Nyaa Auto Download Extension */
+
+/* Tracking button styles */
+.nyaa-tracker-btn {
+  background: #2196F3;
+  color: white;
+  border: none;
+  padding: 4px 8px;
+  border-radius: 4px;
+  font-size: 12px;
+  cursor: pointer;
+  margin-left: 8px;
+  transition: all 0.2s ease;
+  font-family: inherit;
+}
+
+.nyaa-tracker-btn:hover {
+  background: #1976D2;
+  transform: translateY(-1px);
+}
+
+.nyaa-tracker-btn:active {
+  transform: translateY(0);
+}
+
+.nyaa-tracker-btn:disabled {
+  background: #4CAF50;
+  cursor: not-allowed;
+  transform: none;
+}
+
+/* Episode badge styles */
+.nyaa-episode-badge {
+  background: #FF9800;
+  color: white;
+  padding: 2px 6px;
+  border-radius: 12px;
+  font-size: 10px;
+  font-weight: bold;
+  margin-left: 8px;
+  display: inline-block;
+  vertical-align: middle;
+}
+
+/* Notification styles */
+.nyaa-notification {
+  position: fixed;
+  top: 20px;
+  right: 20px;
+  padding: 12px 16px;
+  border-radius: 6px;
+  color: white;
+  font-weight: 500;
+  z-index: 10000;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+  animation: slideIn 0.3s ease-out;
+  max-width: 300px;
+  word-wrap: break-word;
+}
+
+.nyaa-notification-success {
+  background: #4CAF50;
+}
+
+.nyaa-notification-error {
+  background: #F44336;
+}
+
+.nyaa-notification-info {
+  background: #2196F3;
+}
+
+.nyaa-notification-warning {
+  background: #FF9800;
+}
+
+@keyframes slideIn {
+  from {
+    transform: translateX(100%);
+    opacity: 0;
+  }
+  to {
+    transform: translateX(0);
+    opacity: 1;
+  }
+}
+
+/* Highlighted tracked anime rows */
+.nyaa-tracked-highlight {
+  background-color: rgba(76, 175, 80, 0.1) !important;
+  border-left: 3px solid #4CAF50 !important;
+}
+
+.nyaa-tracked-highlight:hover {
+  background-color: rgba(76, 175, 80, 0.2) !important;
+}
+
+/* Episode info tooltip */
+.nyaa-episode-badge:hover::after {
+  content: attr(title);
+  position: absolute;
+  background: #333;
+  color: white;
+  padding: 4px 8px;
+  border-radius: 4px;
+  font-size: 11px;
+  white-space: nowrap;
+  z-index: 1000;
+  margin-top: 20px;
+  margin-left: -10px;
+}
+
+/* Responsive adjustments */
+@media (max-width: 768px) {
+  .nyaa-tracker-btn {
+    font-size: 10px;
+    padding: 3px 6px;
+  }
+  
+  .nyaa-episode-badge {
+    font-size: 9px;
+    padding: 1px 4px;
+  }
+  
+  .nyaa-notification {
+    right: 10px;
+    left: 10px;
+    max-width: none;
+  }
+}
+
+/* Dark theme support */
+@media (prefers-color-scheme: dark) {
+  .nyaa-tracker-btn {
+    background: #1976D2;
+  }
+  
+  .nyaa-tracker-btn:hover {
+    background: #1565C0;
+  }
+  
+  .nyaa-episode-badge {
+    background: #FF6F00;
+  }
+}
+
+/* Integration with Nyaa.si table styles */
+tbody tr:hover .nyaa-tracker-btn {
+  opacity: 1;
+}
+
+tbody tr .nyaa-tracker-btn {
+  opacity: 0.8;
+  transition: opacity 0.2s ease;
+}
+
+/* Loading state for buttons */
+.nyaa-tracker-btn.loading {
+  background: #9E9E9E;
+  cursor: not-allowed;
+}
+
+.nyaa-tracker-btn.loading::after {
+  content: '';
+  display: inline-block;
+  width: 12px;
+  height: 12px;
+  border: 2px solid transparent;
+  border-top: 2px solid white;
+  border-radius: 50%;
+  animation: spin 1s linear infinite;
+  margin-left: 4px;
+}
+
+@keyframes spin {
+  0% { transform: rotate(0deg); }
+  100% { transform: rotate(360deg); }
+}

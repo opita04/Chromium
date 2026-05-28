@@ -277,6 +277,14 @@
           transform: translateY(-50%) translateX(0);
           opacity: 1;
         }
+        #${this.barId}.minimized {
+          padding: 8px;
+          gap: 0;
+          overflow: visible;
+        }
+        #${this.barId}.minimized > :not(.yt-bespoke-collapse-toggle) {
+          display: none;
+        }
         #${this.barId}:hover {
           background: rgba(22, 22, 22, 0.75);
           border-color: rgba(255, 255, 255, 0.15);
@@ -304,6 +312,38 @@
         }
         #${this.barId} button:active {
           transform: scale(0.95);
+        }
+        #${this.barId} button.active {
+          background: rgba(255, 255, 255, 0.18);
+          color: white;
+          box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.18);
+        }
+        #${this.barId} .yt-bespoke-collapse-toggle {
+          background: rgba(255, 255, 255, 0.08);
+        }
+        #${this.barId}.minimized .yt-bespoke-collapse-toggle {
+          background: rgba(255, 255, 255, 0.12);
+          color: white;
+        }
+        #${this.barId} .yt-bespoke-collapse-toggle svg {
+          width: 20px;
+          height: 20px;
+          display: block;
+          stroke: currentColor;
+          stroke-width: 2.2;
+          fill: none;
+          stroke-linecap: round;
+          stroke-linejoin: round;
+        }
+        #${this.barId} .yt-bespoke-share-button svg {
+          width: 21px;
+          height: 21px;
+          flex: 0 0 auto;
+          stroke: currentColor;
+          stroke-width: 2;
+          fill: none;
+          stroke-linecap: round;
+          stroke-linejoin: round;
         }
         #${this.barId} .platform-icon {
           width: 22px;
@@ -377,6 +417,18 @@
       const bar = document.createElement('div');
       bar.id = this.barId;
 
+      const collapseBtn = document.createElement('button');
+      collapseBtn.className = 'yt-bespoke-collapse-toggle';
+      collapseBtn.type = 'button';
+      collapseBtn.onclick = async (e) => {
+        e.stopPropagation();
+        const collapsed = !bar.classList.contains('minimized');
+        await this.setCollapsed(collapsed);
+        this.updateCollapsedState(bar, collapseBtn, collapsed);
+      };
+      bar.appendChild(collapseBtn);
+      this.loadCollapsedState(bar, collapseBtn);
+
       this.platforms.forEach(p => {
         const btn = document.createElement('button');
         btn.title = p.name;
@@ -392,10 +444,22 @@
       });
 
       const separator = document.createElement('div');
+      separator.className = 'yt-bespoke-separator';
       separator.style.height = '1px';
       separator.style.background = 'rgba(255,255,255,0.1)';
       separator.style.margin = '4px 8px';
       bar.appendChild(separator);
+
+      const shareBtn = document.createElement('button');
+      shareBtn.className = 'yt-bespoke-share-button';
+      shareBtn.title = 'Share transcript';
+      shareBtn.setAttribute('aria-label', 'Share transcript');
+      shareBtn.innerHTML = this.getShareIcon();
+      shareBtn.onclick = async (e) => {
+        e.stopPropagation();
+        await this.handleAction('share');
+      };
+      bar.appendChild(shareBtn);
 
       const copyBtn = document.createElement('button');
       copyBtn.title = 'Copy Unique Transcript';
@@ -419,6 +483,59 @@
       requestAnimationFrame(() => bar.classList.add('visible'));
     }
 
+    async loadCollapsedState(bar, button) {
+      if (!chrome.storage?.local) {
+        this.updateCollapsedState(bar, button, false);
+        return;
+      }
+
+      const result = await chrome.storage.local.get([CONFIG.STORAGE_KEYS.COLLAPSED]);
+      this.updateCollapsedState(bar, button, result[CONFIG.STORAGE_KEYS.COLLAPSED] === true);
+    }
+
+    async setCollapsed(collapsed) {
+      if (!chrome.storage?.local) return;
+      await chrome.storage.local.set({ [CONFIG.STORAGE_KEYS.COLLAPSED]: collapsed });
+    }
+
+    updateCollapsedState(bar, button, collapsed) {
+      bar.classList.toggle('minimized', collapsed);
+      button.title = collapsed ? 'Expand transcript tools' : 'Collapse transcript tools';
+      button.setAttribute('aria-label', button.title);
+      button.setAttribute('aria-expanded', String(!collapsed));
+      button.innerHTML = this.getCollapseIcon(collapsed);
+    }
+
+    getCollapseIcon(collapsed) {
+      if (collapsed) {
+        return `
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <path d="M8 5h8" />
+            <path d="M8 12h8" />
+            <path d="M8 19h8" />
+          </svg>
+        `;
+      }
+
+      return `
+        <svg viewBox="0 0 24 24" aria-hidden="true">
+          <path d="M8 6l8 6-8 6" />
+        </svg>
+      `;
+    }
+
+    getShareIcon() {
+      return `
+        <svg viewBox="0 0 24 24" aria-hidden="true">
+          <circle cx="18" cy="5" r="3" />
+          <circle cx="6" cy="12" r="3" />
+          <circle cx="18" cy="19" r="3" />
+          <path d="M8.6 10.7l6.8-4.4" />
+          <path d="M8.6 13.3l6.8 4.4" />
+        </svg>
+      `;
+    }
+
     async handleAction(actionId) {
       const toastId = this.showToast('Step 1: Expanding Description...', 30000);
       try {
@@ -436,13 +553,17 @@
 
         if (toastMsg) toastMsg.innerText = 'Step 3: Reading Transcript Content...';
 
-        const [text, templateObj] = await Promise.all([
-          this.tm.getTranscriptText(),
-          this.tplm.getSelectedTemplate()
-        ]);
+        const text = await this.tm.getTranscriptText();
 
         if (!text) throw new Error('Transcript empty or still loading.');
 
+        if (actionId === 'share') {
+          this.hideToast(toastId);
+          await this.shareTranscript(text);
+          return;
+        }
+
+        const templateObj = await this.tplm.getSelectedTemplate();
         const title = this.tm.getVideoTitle();
         const fullPrompt = templateObj.template
           .replace(/{{Title}}/g, title)
@@ -460,12 +581,22 @@
             analysisPrompt: fullPrompt
           });
           this.hideToast(toastId);
-          this.showToast(`Relaying to ${platform.name}...`);
+          this.showToast(`Relaying template to ${platform.name}...`);
         }
       } catch (err) {
         this.hideToast(toastId);
         this.showToast(`Error: ${err.message}`, 5000);
       }
+    }
+
+    async shareTranscript(transcriptText) {
+      if (navigator.share) {
+        await navigator.share({ text: transcriptText });
+        return;
+      }
+
+      await navigator.clipboard.writeText(transcriptText);
+      this.showToast('Share picker unavailable. Transcript copied.');
     }
 
     openSettings() {

@@ -1,0 +1,257 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AudiobookBay Downloader - Settings</title>
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 20px;
+            background: #f5f5f5;
+        }
+        .container {
+            background: white;
+            border-radius: 8px;
+            padding: 30px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+        }
+        h1 {
+            color: #333;
+            margin-bottom: 30px;
+            text-align: center;
+        }
+        .section {
+            margin-bottom: 40px;
+        }
+        .section h2 {
+            color: #555;
+            border-bottom: 2px solid #6a1b9a;
+            padding-bottom: 10px;
+            margin-bottom: 20px;
+        }
+        .form-group {
+            margin-bottom: 15px;
+        }
+        label {
+            display: block;
+            margin-bottom: 5px;
+            font-weight: 500;
+            color: #333;
+        }
+        input[type="text"], input[type="password"], input[type="number"], select {
+            width: 100%;
+            padding: 10px;
+            border: 2px solid #ddd;
+            border-radius: 4px;
+            font-size: 14px;
+            box-sizing: border-box;
+        }
+        input:focus, select:focus {
+            outline: none;
+            border-color: #6a1b9a;
+        }
+        .url-list {
+            border: 2px solid #ddd;
+            border-radius: 4px;
+            min-height: 100px;
+            padding: 10px;
+            background: #fafafa;
+        }
+        .url-item {
+            display: flex;
+            align-items: center;
+            padding: 8px;
+            background: white;
+            margin-bottom: 5px;
+            border-radius: 4px;
+            border: 1px solid #eee;
+        }
+        .url-item span {
+            flex-grow: 1;
+            font-family: monospace;
+            color: #333;
+        }
+        .url-item .remove-btn {
+            background: #f44336;
+            color: white;
+            border: none;
+            padding: 4px 8px;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 12px;
+        }
+        .url-item .remove-btn:hover {
+            background: #d32f2f;
+        }
+        .add-url-container {
+            display: flex;
+            gap: 10px;
+            margin-top: 10px;
+        }
+        .add-url-container input {
+            flex-grow: 1;
+        }
+        .btn {
+            background: #6a1b9a;
+            color: white;
+            border: none;
+            padding: 10px 20px;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 14px;
+            transition: background 0.3s;
+        }
+        .btn:hover {
+            background: #8e24aa;
+        }
+        .btn.secondary {
+            background: #666;
+        }
+        .btn.secondary:hover {
+            background: #777;
+        }
+        .save-status {
+            margin-top: 20px;
+            padding: 10px;
+            border-radius: 4px;
+            text-align: center;
+            display: none;
+        }
+        .save-status.success {
+            background: #d4edda;
+            color: #155724;
+            border: 1px solid #c3e6cb;
+        }
+        .save-status.error {
+            background: #f8d7da;
+            color: #721c24;
+            border: 1px solid #f5c6cb;
+        }
+        .help-text {
+            font-size: 12px;
+            color: #666;
+            margin-top: 5px;
+        }
+        .preset-urls {
+            display: flex;
+            gap: 10px;
+            flex-wrap: wrap;
+            margin-top: 10px;
+        }
+        .preset-btn {
+            background: #e0e0e0;
+            border: 1px solid #ccc;
+            padding: 5px 10px;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 12px;
+            color: #333;
+        }
+        .preset-btn:hover {
+            background: #d0d0d0;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>AudiobookBay Downloader Settings</h1>
+        
+        <div class="section">
+            <h2>AudiobookBay Domains</h2>
+            <p>Add the AudiobookBay domains you want to use. The extension will work on all configured domains.</p>
+            
+            <div class="url-list" id="urlList">
+                <!-- URLs will be populated here -->
+            </div>
+            
+            <div class="add-url-container">
+                <input type="text" id="newUrlInput" placeholder="Enter domain (e.g., audiobookbay.lu)" />
+                <button class="btn" onclick="addUrl()">Add Domain</button>
+            </div>
+            
+            <div class="preset-urls">
+                <button class="preset-btn" onclick="addPresetUrl('audiobookbay.lu')">audiobookbay.lu</button>
+                <button class="preset-btn" onclick="addPresetUrl('audiobookbay.is')">audiobookbay.is</button>
+                <button class="preset-btn" onclick="addPresetUrl('audiobookbay.ai')">audiobookbay.ai</button>
+            </div>
+            
+            <p class="help-text">
+                Enter just the domain name (without http:// or https://). The extension will work on both HTTP and HTTPS versions.
+            </p>
+        </div>
+        
+        <div class="section">
+            <h2>Torrent Client Configuration</h2>
+            
+            <div class="form-group">
+                <label for="downloadClient">Download Client:</label>
+                <select id="downloadClient" onchange="updateClientFields()">
+                    <option value="qbittorrent">qBittorrent</option>
+                    <option value="transmission">Transmission</option>
+                    <option value="delugeweb">Deluge (Web UI)</option>
+                </select>
+            </div>
+            
+            <div class="form-group">
+                <label for="clientHost">Host/IP Address:</label>
+                <input type="text" id="clientHost" placeholder="192.168.1.100 or localhost" />
+            </div>
+            
+            <div class="form-group">
+                <label for="clientPort">Port:</label>
+                <input type="number" id="clientPort" placeholder="8080" />
+            </div>
+            
+            <div class="form-group">
+                <label for="clientScheme">Protocol:</label>
+                <select id="clientScheme">
+                    <option value="http">HTTP</option>
+                    <option value="https">HTTPS</option>
+                </select>
+            </div>
+            
+            <div class="form-group">
+                <label for="clientUsername">Username:</label>
+                <input type="text" id="clientUsername" placeholder="admin" />
+            </div>
+            
+            <div class="form-group">
+                <label for="clientPassword">Password:</label>
+                <input type="password" id="clientPassword" placeholder="password" />
+            </div>
+            
+            <div class="form-group">
+                <label for="downloadCategory">Download Category/Label:</label>
+                <input type="text" id="downloadCategory" placeholder="Audiobookbay-Audiobooks" />
+                <p class="help-text">Category or label to assign to downloads in your torrent client</p>
+            </div>
+            
+            <div class="form-group">
+                <label for="savePathBase">Save Path (Base Directory):</label>
+                <input type="text" id="savePathBase" placeholder="/audiobooks or C:\Audiobooks" />
+                <p class="help-text">Base directory where audiobooks will be downloaded (relative to your torrent client)</p>
+            </div>
+        </div>
+        
+        <div class="section">
+            <h2>Search Settings</h2>
+            
+            <div class="form-group">
+                <label for="pageLimit">Search Page Limit:</label>
+                <input type="number" id="pageLimit" min="1" max="20" value="5" />
+                <p class="help-text">Maximum number of pages to search (higher values may trigger rate limiting)</p>
+            </div>
+        </div>
+        
+        <button class="btn" onclick="saveSettings()">Save Settings</button>
+        <button class="btn secondary" onclick="testConnection()">Test Connection</button>
+        
+        <div class="save-status" id="saveStatus"></div>
+    </div>
+    
+    <script src="options.js"></script>
+</body>
+</html>

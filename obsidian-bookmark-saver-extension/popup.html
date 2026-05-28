@@ -1,0 +1,40 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <title>Obsidian Bookmark Saver</title>
+    <link rel="stylesheet" href="popup.css">
+  </head>
+  <body>
+    <main class="card">
+      <div class="header">
+        <div class="mark">B</div>
+        <div>
+          <h1>Save Bookmark</h1>
+          <p id="pageTitle">Current page</p>
+        </div>
+      </div>
+
+      <label for="categorySelect">Category</label>
+      <select id="categorySelect"></select>
+
+      <details class="bulkOptions">
+        <summary>Bulk save options</summary>
+        <label class="scopeLabel" for="scopeSelect">Save mode</label>
+        <select id="scopeSelect">
+          <option value="current">Current tab only</option>
+          <option value="window">All tabs in this window</option>
+        </select>
+      </details>
+
+      <form id="newCategoryForm">
+        <input id="newCategoryInput" type="text" placeholder="Add new category">
+        <button type="submit">Add</button>
+      </form>
+
+      <button id="saveButton" type="button">Save Current Tab to Obsidian</button>
+      <p id="status" role="status"></p>
+    </main>
+    <script src="popup.js"></script>
+  </body>
+</html>

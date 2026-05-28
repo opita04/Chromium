@@ -1,0 +1,51 @@
+{
+  "manifest_version": 3,
+  "name": "AudiobookBay Downloader",
+  "version": "1.0.0",
+  "description": "Automatically download audiobooks from AudiobookBay to your torrent client",
+  
+  "permissions": [
+    "storage",
+    "notifications",
+    "contextMenus",
+    "activeTab"
+  ],
+  
+  "host_permissions": [
+    "http://*/*",
+    "https://*/*"
+  ],
+  
+  "background": {
+    "service_worker": "background.js"
+  },
+  
+  "content_scripts": [
+    {
+      "matches": ["*://*/*"],
+      "js": ["content.js"],
+      "css": ["content.css"]
+    }
+  ],
+  
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "AudiobookBay Downloader"
+  },
+  
+  "options_page": "options.html",
+  
+  "icons": {
+    "16": "icons/icon.png",
+    "32": "icons/icon.png",
+    "48": "icons/icon.png",
+    "128": "icons/icon.png"
+  },
+  
+  "web_accessible_resources": [
+    {
+      "resources": ["icons/*.png", "content.css"],
+      "matches": ["<all_urls>"]
+    }
+  ]
+}

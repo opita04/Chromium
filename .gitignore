@@ -42,3 +42,36 @@ temp/
 
 # Cursor
 .cursor/
+# Added by project GitHub sync
+# macOS / editor
+.DS_Store
+*.swp
+.vscode/
+.idea/
+
+# dependencies / build output
+node_modules/
+.venv/
+.venv*/
+venv/
+__pycache__/
+*.pyc
+.next/
+.svelte-kit/
+dist/
+build/
+coverage/
+.cache/
+
+# local env/secrets
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+
+# generated bundles / repo dumps
+repomix-output.xml
+*.log
+

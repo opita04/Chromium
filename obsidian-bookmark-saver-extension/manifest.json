@@ -1,0 +1,29 @@
+{
+  "manifest_version": 3,
+  "name": "Obsidian Bookmark Saver",
+  "description": "Save the current page title and URL to categorized Markdown files in your Obsidian vault.",
+  "version": "1.0.0",
+  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEA00kQWeqbp3NpV8sfdpaOrNkDJ73KxQJThQErKkBNQ2cgo8vG3KTR46KxN80s6ZgADANRgcvL19hFQX3dnAHHLLHMyrPN1aV0Rby88qAo1zvgZnKsCdigSonQs8f8aqFHrOuLh/+fJ5dYRQ2bc6rZr+J4BaJxKuAvyaN2wsLPyW/UVMGVVkzbKClwXcw3NCA5leWFY85eM6PXSXQasLVlXemZUExTZvruQY3aJu6S0lRscSh54UZKIo0zf1HljBTNdX2me84O/Z+uikJ/1HFyvfM+sqjwMSz7X2fwXV5rcS9lZiX4YMKs5xEonX3WmccWWi1bC9+dXmEbjyzOoCzu4QIDAQAB",
+  "permissions": [
+    "activeTab",
+    "nativeMessaging",
+    "storage",
+    "tabs"
+  ],
+  "icons": {
+    "16": "assets/icon16.png",
+    "32": "assets/icon32.png",
+    "48": "assets/icon48.png",
+    "128": "assets/icon128.png"
+  },
+  "action": {
+    "default_title": "Save to Obsidian Bookmarks",
+    "default_popup": "popup.html",
+    "default_icon": {
+      "16": "assets/icon16.png",
+      "32": "assets/icon32.png",
+      "48": "assets/icon48.png",
+      "128": "assets/icon128.png"
+    }
+  }
+}

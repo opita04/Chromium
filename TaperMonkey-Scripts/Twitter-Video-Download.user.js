@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name         Twitter DL - Enhanced
-// @version      2.0.0
+// @version      2.1.0
 // @description  Download Twitter/X videos directly from your browser with improved reliability and UX
 // @author       OPitA (enhanced refactor)
 // @license      MIT
@@ -9,6 +9,8 @@
 // @match        https://x.com/*
 // @match        https://pro.twitter.com/*
 // @match        https://pro.x.com/*
+// @connect      cdn.syndication.twimg.com
+// @connect      video.twimg.com
 // @connect      twitter-video-download.com
 // @connect      twimg.com
 // @icon         https://www.google.com/s2/favicons?sz=64&domain=twitter.com
@@ -24,6 +26,7 @@
     // ═══════════════════════════════════════════════════════════════════════════
     const CONFIG = {
         API_ENDPOINT: 'https://twitter-video-download.com/fr/tweet/',
+        SYNDICATION_ENDPOINT: 'https://cdn.syndication.twimg.com/tweet-result',
         RETRY: {
             MAX_ATTEMPTS: 3,
             BASE_DELAY_MS: 1000,
@@ -47,9 +50,10 @@
             APP_LINK_ROW: 'a[href*="/status/"][role="link"][dir="auto"]', // Timestamp link row
         },
         REGEX: {
-            TWEET_URL: /https:\/\/(?:pro\.)?(?:x|twitter)\.com\/([^/]+)\/status\/(\d+)/,
-            STATUS_URL: /^https?:\/\/(?:pro\.)?(?:x|twitter)\.com\/\w+\/status\/\d+$/,
-            VALID_URL: /^https?:\/\/(?:pro\.)?(?:x|twitter)\.com\/\w+(\/\w+)*$/,
+            TWEET_URL: /^https?:\/\/(?:mobile\.|pro\.)?(?:x|twitter)\.com\/(?:i\/web\/)?([^/?#]+)\/status\/(\d+)/,
+            ID_ONLY_TWEET_URL: /^https?:\/\/(?:mobile\.|pro\.)?(?:x|twitter)\.com\/i\/status\/(\d+)/,
+            STATUS_URL: /^https?:\/\/(?:mobile\.|pro\.)?(?:x|twitter)\.com\/(?:(?:i\/web\/)?[^/?#]+\/status|i\/status)\/\d+(?:[/?#].*)?$/,
+            VALID_URL: /^https?:\/\/(?:mobile\.|pro\.)?(?:x|twitter)\.com\/[^?#]+(?:[?#].*)?$/,
             VIDEO_URL: /https:\/\/[a-zA-Z0-9_-]+\.twimg\.com\/[a-zA-Z0-9_\-./]+\.mp4/g,
             RESOLUTION: /\/(\d+x\d+)\//,
         },
@@ -243,9 +247,27 @@
          * Extract tweet info from URL
          */
         extractTweetInfo: (url) => {
+            const idOnlyMatch = url.match(CONFIG.REGEX.ID_ONLY_TWEET_URL);
+            if (idOnlyMatch) return { username: 'tweet', id: idOnlyMatch[1], url };
+
             const match = url.match(CONFIG.REGEX.TWEET_URL);
-            if (!match) return null;
-            return { username: match[1], id: match[2], url };
+            if (match) return { username: match[1], id: match[2], url };
+
+            return null;
+        },
+
+        /**
+         * Normalize an X/Twitter status URL to the canonical tweet URL.
+         */
+        normalizeTweetUrl: (tweetInfo) => `https://x.com/${tweetInfo.username}/status/${tweetInfo.id}`,
+
+        /**
+         * Generate the token used by X's public embed syndication endpoint.
+         */
+        getSyndicationToken: (tweetId) => {
+            return ((Number(tweetId) / 1e15) * Math.PI)
+                .toString(36)
+                .replace(/(0+|\.)/g, '');
         },
 
         /**
@@ -416,9 +438,107 @@
         },
 
         /**
-         * Get media URLs from tweet ID
+         * Fetch JSON with retry logic and exponential backoff
          */
-        getMediaUrls: async (tweetInfo) => {
+        fetchJsonWithRetry: async (url, attempt = 1) => {
+            try {
+                const response = await new Promise((resolve, reject) => {
+                    GM.xmlHttpRequest({
+                        method: 'GET',
+                        url,
+                        headers: {
+                            Accept: 'application/json,text/plain,*/*',
+                            'Accept-Language': 'en-US,en;q=0.9',
+                        },
+                        onload: resolve,
+                        onerror: reject,
+                        ontimeout: () => reject(new Error('Request timeout')),
+                    });
+                });
+
+                if (!response.responseText) {
+                    throw new Error('Empty response');
+                }
+
+                return JSON.parse(response.responseText);
+            } catch (error) {
+                if (attempt < CONFIG.RETRY.MAX_ATTEMPTS) {
+                    const delay = CONFIG.RETRY.BASE_DELAY_MS * Math.pow(CONFIG.RETRY.BACKOFF_MULTIPLIER, attempt - 1);
+                    utils.log(`JSON retry ${attempt}/${CONFIG.RETRY.MAX_ATTEMPTS} after ${delay}ms...`);
+                    await utils.sleep(delay);
+                    return api.fetchJsonWithRetry(url, attempt + 1);
+                }
+                throw error;
+            }
+        },
+
+        /**
+         * Parse X syndication media variants into the same shape used by the UI.
+         */
+        parseSyndicationMedia: (tweetInfo, data) => {
+            const variants = [
+                ...(data?.video?.variants || []).map((variant) => ({
+                    link: variant.src,
+                    contentType: variant.type,
+                    bitrate: variant.bitrate || 0,
+                })),
+                ...(data?.mediaDetails || []).flatMap((media) => {
+                    const mediaVariants = media?.video_info?.variants || [];
+                    return mediaVariants.map((variant) => ({
+                        link: variant.url,
+                        contentType: variant.content_type,
+                        bitrate: variant.bitrate || 0,
+                    }));
+                }),
+            ].filter((variant) => variant.link && variant.contentType === 'video/mp4');
+
+            if (variants.length === 0) return null;
+
+            variants.sort((a, b) => {
+                if (a.bitrate !== b.bitrate) return a.bitrate - b.bitrate;
+                return utils.calculateResolutionSize(a.link.match(CONFIG.REGEX.RESOLUTION)?.[1]) -
+                    utils.calculateResolutionSize(b.link.match(CONFIG.REGEX.RESOLUTION)?.[1]);
+            });
+
+            const seen = new Set();
+            const unique = variants.filter((variant) => {
+                if (seen.has(variant.link)) return false;
+                seen.add(variant.link);
+                return true;
+            });
+
+            const isGif = tweetInfo.isGif || data?.mediaDetails?.some((media) => media.type === 'animated_gif');
+            const lq = unique.length > 2 ? unique[1]?.link : unique[0]?.link;
+            const hq = isGif ? null : unique[unique.length - 1]?.link;
+
+            return { lq, hq: hq !== lq ? hq : null, isGif };
+        },
+
+        /**
+         * Get media URLs from X's public syndication endpoint.
+         */
+        getMediaUrlsFromSyndication: async (tweetInfo) => {
+            const token = utils.getSyndicationToken(tweetInfo.id);
+            const params = new URLSearchParams({
+                id: tweetInfo.id,
+                token,
+                lang: 'en',
+            });
+            const url = `${CONFIG.SYNDICATION_ENDPOINT}?${params.toString()}`;
+
+            try {
+                const data = await api.fetchJsonWithRetry(url);
+                return api.parseSyndicationMedia(tweetInfo, data);
+            } catch (error) {
+                utils.error('Failed to fetch syndication media URLs:', error);
+                return null;
+            }
+        },
+
+        /**
+         * Get media URLs from the legacy third-party scraper.
+         */
+        getMediaUrlsFromLegacyScraper: async (tweetInfo) => {
             const url = `${CONFIG.API_ENDPOINT}${tweetInfo.id}`;
 
             try {
@@ -468,6 +588,17 @@
                 utils.error('Failed to fetch media URLs:', error);
                 return null;
             }
+        },
+
+        /**
+         * Get media URLs from tweet ID.
+         */
+        getMediaUrls: async (tweetInfo) => {
+            const syndicationMedia = await api.getMediaUrlsFromSyndication(tweetInfo);
+            if (syndicationMedia) return syndicationMedia;
+
+            utils.log('Syndication endpoint had no MP4 media, trying legacy scraper...');
+            return api.getMediaUrlsFromLegacyScraper(tweetInfo);
         },
 
         /**
@@ -659,6 +790,7 @@
         injectButtons: async (tweetEl) => {
             const tweetInfo = tweet.getInfo(tweetEl);
             if (!tweetInfo) return;
+            tweetInfo.url = utils.normalizeTweetUrl(tweetInfo);
 
             const medias = await api.getMediaUrls(tweetInfo);
             if (!medias) return;
