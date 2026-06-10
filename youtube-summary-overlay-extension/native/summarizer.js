@@ -152,6 +152,14 @@ function buildPrompt(video) {
   return buildYouTubePrompt(source);
 }
 
+function systemPromptFor(video) {
+  const source = normalizeSource(video);
+  if (source.sourceType === 'webpage') {
+    return 'You write accurate, concrete webpage/article analysis in Markdown for private research notes. Prioritize specificity, argument structure, and practical implications. For sensitive topics, summarize neutrally instead of refusing.';
+  }
+  return 'You write accurate, concrete YouTube transcript analysis in Markdown for private research notes. Prioritize specificity, argument structure, and practical implications. For sensitive topics, summarize neutrally instead of refusing.';
+}
+
 function buildYouTubePrompt(video) {
   return `You are turning a YouTube transcript into Jaime's Obsidian research notes.
 
@@ -251,7 +259,7 @@ async function requestOpenRouter({ video, model }) {
     body: JSON.stringify({
       model,
       messages: [
-        { role: 'system', content: 'You write accurate, concrete source analysis in Markdown for private research notes. Prioritize specificity, argument structure, and practical implications. For sensitive topics, summarize neutrally instead of refusing.' },
+        { role: 'system', content: systemPromptFor(source) },
         { role: 'user', content: buildPrompt(source) },
       ],
       temperature: 0.2,
@@ -391,5 +399,6 @@ module.exports = {
   outputPathFor,
   saveMarkdown,
   summarizeAndSave,
+  systemPromptFor,
   updateMarkdownCategory,
 };

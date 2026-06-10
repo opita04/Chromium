@@ -2,6 +2,8 @@
   'use strict';
 
   const DEFAULT_MODEL = 'mistralai/mistral-small-24b-instruct-2501';
+  const PREVIOUS_DEFAULT_MODELS = new Set(['nvidia/nemotron-3-ultra-550b-a55b:free']);
+  const SUMMARY_RESPONSE_TIMEOUT_MS = 35000;
   const CATEGORIES = ['Political', 'Coding', 'Educational', 'General', 'Business', 'AI', 'Finance', 'Health', 'Science', 'Others'];
   const MODEL_PRESETS = [
     ['DeepSeek', 'deepseek/deepseek-v4-flash', 'assets/model-icons/deepseek-color.svg'],
@@ -67,6 +69,10 @@
     model: DEFAULT_MODEL,
     busy: false,
   };
+
+  function effectiveModel(model) {
+    return model && !PREVIOUS_DEFAULT_MODELS.has(model) ? model : DEFAULT_MODEL;
+  }
   let lastObservedVideoId = '';
 
   const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -309,9 +315,18 @@
     return { ok: true, video: { title, channel, url, videoId, transcript } };
   }
 
-  function sendMessage(message) {
+  function sendMessage(message, timeoutMs = 0) {
     return new Promise((resolve) => {
+      let settled = false;
+      const timeout = timeoutMs > 0 ? setTimeout(() => {
+        settled = true;
+        resolve({ ok: false, error: `No extension response after ${Math.round(timeoutMs / 1000)}s.` });
+      }, timeoutMs) : null;
+
       chrome.runtime.sendMessage(message, (response) => {
+        if (settled) return;
+        settled = true;
+        if (timeout) clearTimeout(timeout);
         if (chrome.runtime.lastError) {
           resolve({ ok: false, error: chrome.runtime.lastError.message });
           return;
@@ -729,15 +744,16 @@
         : 'Summary overlay';
     }
     if (meta) meta.textContent = '';
-    if (model) model.value = state.model || DEFAULT_MODEL;
+    const selectedModel = effectiveModel(state.model);
+    if (model) model.value = selectedModel;
     document.getElementById(OVERLAY_ID)?.querySelectorAll('[data-model-preset]').forEach((button) => {
-      button.dataset.active = button.dataset.modelPreset === (state.model || DEFAULT_MODEL) ? 'true' : 'false';
+      button.dataset.active = button.dataset.modelPreset === selectedModel ? 'true' : 'false';
     });
     if (category) category.value = CATEGORIES.includes(state.category) ? state.category : 'General';
     if (summary) renderMarkdown(state.markdown || '', summary);
     if (pathLine) pathLine.textContent = state.path ? `Saved: ${state.path}` : '';
     if (state.markdown) {
-      setStatus(fromCache ? 'Loaded cached summary. It did not rerun.' : `Done. Category: ${state.category}`);
+      setStatus(fromCache ? `Loaded cached summary. Redo summary uses ${effectiveModel(state.model)}.` : `Done. Category: ${state.category}`);
       setActionButton('Open Summary', 'is-done');
     }
   }
@@ -754,7 +770,7 @@
     }
 
     state = { ...state, video: null, markdown: '', path: '', category: 'General', busy: false };
-    await runSummary({ force: false, model: state.model || DEFAULT_MODEL, openWhenReady: true });
+    await runSummary({ force: false, model: effectiveModel(state.model), openWhenReady: true });
   }
 
   async function runSummary({ force, model, openWhenReady = false }) {
@@ -778,7 +794,7 @@
       const extracted = await extractVideo();
       state.video = extracted.video;
       if (!openWhenReady) renderState(false);
-      const selectedModel = model || overlayPart('model')?.value.trim() || DEFAULT_MODEL;
+      const selectedModel = model || effectiveModel(overlayPart('model')?.value.trim());
       setProgress(35, `Transcript ready. Sending to ${selectedModel}…`);
       const waitTimers = [
         setTimeout(() => setProgress(50, `Still waiting on ${selectedModel}…`), 5000),
@@ -787,7 +803,7 @@
       ];
       let result;
       try {
-        result = await sendMessage({ type: 'SUMMARIZE_AND_SAVE', video: state.video, model: selectedModel });
+        result = await sendMessage({ type: 'SUMMARIZE_AND_SAVE', video: state.video, model: selectedModel }, SUMMARY_RESPONSE_TIMEOUT_MS);
       } finally {
         waitTimers.forEach((timer) => clearTimeout(timer));
       }
@@ -808,11 +824,9 @@
       renderState(false);
     } catch (error) {
       setActionButton('Error', 'is-error');
-      if (!openWhenReady) {
-        setStatus(`Error: ${error.message}`);
-      } else {
-        console.error('YouTube summary failed:', error);
-      }
+      if (openWhenReady) buildOverlay().hidden = false;
+      setStatus(`Error: ${error.message}`);
+      console.error('YouTube summary failed:', error);
     } finally {
       setBusy(false);
     }

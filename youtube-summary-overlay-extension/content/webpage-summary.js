@@ -5,6 +5,7 @@
   window.__opitaWebpageSummaryLoaded = true;
 
   const DEFAULT_MODEL = 'mistralai/mistral-small-24b-instruct-2501';
+  const SUMMARY_RESPONSE_TIMEOUT_MS = 35000;
   const OVERLAY_ID = 'opita-webpage-summary-overlay';
   const BUTTON_ID = 'opita-webpage-summary-button';
   const CATEGORIES = ['Political', 'Coding', 'Educational', 'General', 'Business', 'AI', 'Finance', 'Health', 'Science', 'Others'];
@@ -46,9 +47,18 @@
     });
   }
 
-  function sendMessage(message) {
+  function sendMessage(message, timeoutMs = 0) {
     return new Promise((resolve) => {
+      let settled = false;
+      const timeout = timeoutMs > 0 ? setTimeout(() => {
+        settled = true;
+        resolve({ ok: false, error: `No extension response after ${Math.round(timeoutMs / 1000)}s.` });
+      }, timeoutMs) : null;
+
       chrome.runtime.sendMessage(message, (response) => {
+        if (settled) return;
+        settled = true;
+        if (timeout) clearTimeout(timeout);
         if (chrome.runtime.lastError) {
           resolve({ ok: false, error: chrome.runtime.lastError.message });
           return;
@@ -571,7 +581,7 @@
       const selectedModel = overlayPart('model')?.value.trim() || DEFAULT_MODEL;
       setProgress(35, `Page text ready. Sending to ${selectedModel}...`);
       setBusy(true, `Sending page text to ${selectedModel}...`);
-      const result = await sendMessage({ type: 'SUMMARIZE_AND_SAVE', video: state.source, model: selectedModel });
+      const result = await sendMessage({ type: 'SUMMARIZE_AND_SAVE', video: state.source, model: selectedModel }, SUMMARY_RESPONSE_TIMEOUT_MS);
       if (!result.ok) throw new Error(result.error || 'Summarize failed.');
       setProgress(90, 'Saving Markdown note...');
       state = {

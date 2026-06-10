@@ -1,4 +1,5 @@
 const HOST_NAME = 'com.opita.youtube_summary_sidepanel';
+const NATIVE_MESSAGE_TIMEOUT_MS = 30000;
 const AI_PLATFORMS = [
   { id: 'chatgpt', name: 'ChatGPT', url: 'https://chatgpt.com/?model=gpt-4o-mini&quicktube' },
   { id: 'claude', name: 'Claude', url: 'https://claude.ai/chats' },
@@ -18,7 +19,16 @@ async function getActiveYouTubeTab() {
 
 function sendNativeMessage(message) {
   return new Promise((resolve, reject) => {
+    let settled = false;
+    const timeout = setTimeout(() => {
+      settled = true;
+      reject(new Error(`Native host timed out after ${NATIVE_MESSAGE_TIMEOUT_MS / 1000}s.`));
+    }, NATIVE_MESSAGE_TIMEOUT_MS);
+
     chrome.runtime.sendNativeMessage(HOST_NAME, message, (response) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timeout);
       if (chrome.runtime.lastError) {
         reject(new Error(chrome.runtime.lastError.message));
         return;

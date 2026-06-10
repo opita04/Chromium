@@ -2,7 +2,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
-const { CATEGORIES, DEFAULT_MODEL, FALLBACK_MODEL, DEFAULT_OUTPUT_DIR, buildMarkdown, buildPrompt, classifyCategory, normalizeSource, outputPathFor, saveMarkdown, updateMarkdownCategory } = require('../native/summarizer');
+const { CATEGORIES, DEFAULT_MODEL, FALLBACK_MODEL, DEFAULT_OUTPUT_DIR, buildMarkdown, buildPrompt, classifyCategory, normalizeSource, outputPathFor, saveMarkdown, systemPromptFor, updateMarkdownCategory } = require('../native/summarizer');
 
 assert.equal(DEFAULT_MODEL, 'mistralai/mistral-small-24b-instruct-2501');
 assert.equal(FALLBACK_MODEL, 'mistralai/mistral-small-24b-instruct-2501');
@@ -38,6 +38,7 @@ assert.match(prompt, /### Final Observation/);
 assert.match(prompt, /### A\./);
 assert.doesNotMatch(prompt, /## Why It Matters/);
 assert.doesNotMatch(prompt, /## Notable Details/);
+assert.match(systemPromptFor(video), /YouTube transcript analysis/);
 
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'yt-summary-test-'));
 const result = saveMarkdown({ video, markdown, outputDir: tmp, category: 'Educational' });
@@ -87,6 +88,7 @@ const webpagePrompt = buildPrompt(webpage);
 assert.match(webpagePrompt, /extracted webpage\/article text/);
 assert.match(webpagePrompt, /Extracted page text:/);
 assert.doesNotMatch(webpagePrompt, /YouTube transcript/);
+assert.match(systemPromptFor(webpage), /webpage\/article analysis/);
 
 const webpageMarkdown = buildMarkdown({
   video: webpage,
