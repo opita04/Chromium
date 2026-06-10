@@ -28,7 +28,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   // Handle clear videos
   clearVideosBtn.addEventListener('click', async () => {
     // Clear stored videos
-    await chrome.storage.local.remove(['detectedVideos']);
+    await chrome.storage.local.remove(['detectedVideos', 'detectedVideosSourceUrl']);
     
     // Clear badge
     chrome.action.setBadgeText({ text: '' });
@@ -44,9 +44,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     
     // Optional: Refresh the page to re-detect videos
     const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-    if (tab.url.includes('skool.com')) {
-      chrome.tabs.reload(tab.id);
-    }
+    chrome.tabs.reload(tab.id);
   });
 
   // Extract videos function
@@ -63,18 +61,19 @@ document.addEventListener('DOMContentLoaded', async () => {
     // Get current tab
     const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
     
-    if (!tab.url.includes('skool.com')) {
-      videoResult.innerHTML = `
-        <div style="padding: 12px; background: #fee2e2; color: #991b1b; border-radius: 8px;">
-          This extension only works on Skool.com pages
-        </div>
-      `;
-      return;
+    // Ask the active page for a fresh scan. Fall back to stored results for pages
+    // that were scanned before the popup opened.
+    let pageVideos = [];
+    try {
+      const response = await chrome.tabs.sendMessage(tab.id, { action: 'extractVideo' });
+      pageVideos = response?.videos || [];
+    } catch (error) {
+      console.warn('Could not message content script, checking stored videos:', error);
     }
-    
-    // Get videos from storage instead of messaging content script
-    chrome.storage.local.get(['detectedVideos'], async (result) => {
-        const videos = result.detectedVideos || [];
+
+    chrome.storage.local.get(['detectedVideos', 'detectedVideosSourceUrl'], async (result) => {
+        const storedVideos = result.detectedVideosSourceUrl === tab.url ? (result.detectedVideos || []) : [];
+        const videos = pageVideos.length > 0 ? pageVideos : storedVideos;
         
         if (videos.length > 0) {
           // Fetch metadata for videos
@@ -139,7 +138,8 @@ document.addEventListener('DOMContentLoaded', async () => {
                 vimeo: '🎬',
                 loom: '🎥',
                 wistia: '🎞️',
-                skool: '🎓'
+                skool: '🎓',
+                generic: '🎞️'
               };
               const icon = videoIcons[video.type] || '📹';
               
@@ -193,12 +193,12 @@ document.addEventListener('DOMContentLoaded', async () => {
                 <h3 style="font-size: 14px; font-weight: 600; margin: 0 0 12px 0; color: #111827;">How to download:</h3>
                 <ol style="margin: 0; padding-left: 20px; font-size: 13px; color: #4b5563;">
                   <li style="margin-bottom: 6px;">Click the 'Create Download File' button</li>
-                  <li style="margin-bottom: 6px;">A batch file (.bat) will be created and downloaded</li>
-                  <li style="margin-bottom: 6px;">Find the batch file in your Downloads folder and double-click it</li>
-                  <li>The download will run automatically!</li>
+                  <li style="margin-bottom: 6px;">A shell script (.command) will be created in your Downloads folder</li>
+                  <li style="margin-bottom: 6px;">Run it from Terminal to start the download</li>
+                  <li>The video file will save to your normal Downloads folder</li>
                 </ol>
                 <p style="font-size: 12px; color: #059669; margin-top: 8px; font-weight: 500;">
-                  🎯 Videos will be saved to: C:\\AI\\YoutubeDL\\Skool
+                  Videos will be saved to: ~/Downloads
                 </p>
               </div>
               
@@ -229,7 +229,7 @@ document.addEventListener('DOMContentLoaded', async () => {
               // Execute download automatically
               executeAutomaticDownload(decodedCommand).then((result) => {
                 if (result.success) {
-                  this.textContent = 'Batch File Created!';
+                  this.textContent = 'Script Created!';
                   this.style.background = '#10b981';
 
                   // Show success message with file info
@@ -263,7 +263,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         } else {
           videoResult.innerHTML = `
             <div style="padding: 12px; background: #fef3c7; color: #92400e; border-radius: 8px;">
-              No videos found on this page. Make sure you're on a Skool page with a video.
+              No downloadable videos found on this page.
             </div>
           `;
         }
@@ -271,43 +271,45 @@ document.addEventListener('DOMContentLoaded', async () => {
     });
   }
   
-  // Provider-specific download commands with custom yt-dlp.exe path
+  const ytDlpPath = '/Users/opita/.local/bin/yt-dlp';
+  const downloadPath = '$HOME/Downloads';
+
+  function shellQuote(value) {
+    return `'${String(value).replace(/'/g, "'\\''")}'`;
+  }
+
+  // Provider-specific download commands with local yt-dlp path
   const providerCommands = {
     youtube: {
       getCommand: (url) => {
         const format = '-f "bestvideo[height<=1080]+bestaudio/best[height<=1080]" --merge-output-format mp4';
-        const ytDlpPath = 'C:\\AI\\YoutubeDL\\yt-dlp.exe';
-        const downloadPath = 'C:\\AI\\YoutubeDL\\Skool';
-        return `"${ytDlpPath}" ${format} -P "${downloadPath}" "${url}"`;
+        return `${shellQuote(ytDlpPath)} ${format} -P "${downloadPath}" ${shellQuote(url)}`;
       }
     },
     vimeo: {
       getCommand: (url) => {
         const headers = '--add-header "Referer: https://vimeo.com"';
-        const ytDlpPath = 'C:\\AI\\YoutubeDL\\yt-dlp.exe';
-        const downloadPath = 'C:\\AI\\YoutubeDL\\Skool';
-        return `"${ytDlpPath}" ${headers} -P "${downloadPath}" "${url}"`;
+        return `${shellQuote(ytDlpPath)} ${headers} -P "${downloadPath}" ${shellQuote(url)}`;
       }
     },
     loom: {
       getCommand: (url) => {
-        const ytDlpPath = 'C:\\AI\\YoutubeDL\\yt-dlp.exe';
-        const downloadPath = 'C:\\AI\\YoutubeDL\\Skool';
-        return `"${ytDlpPath}" -P "${downloadPath}" "${url}"`;
+        return `${shellQuote(ytDlpPath)} -P "${downloadPath}" ${shellQuote(url)}`;
       }
     },
     wistia: {
       getCommand: (url) => {
-        const ytDlpPath = 'C:\\AI\\YoutubeDL\\yt-dlp.exe';
-        const downloadPath = 'C:\\AI\\YoutubeDL\\Skool';
-        return `"${ytDlpPath}" -P "${downloadPath}" "${url}"`;
+        return `${shellQuote(ytDlpPath)} -P "${downloadPath}" ${shellQuote(url)}`;
       }
     },
     skool: {
       getCommand: (url) => {
-        const ytDlpPath = 'C:\\AI\\YoutubeDL\\yt-dlp.exe';
-        const downloadPath = 'C:\\AI\\YoutubeDL\\Skool';
-        return `"${ytDlpPath}" -P "${downloadPath}" "${url}"`;
+        return `${shellQuote(ytDlpPath)} -P "${downloadPath}" ${shellQuote(url)}`;
+      }
+    },
+    generic: {
+      getCommand: (url) => {
+        return `${shellQuote(ytDlpPath)} -P "${downloadPath}" ${shellQuote(url)}`;
       }
     }
   };
@@ -321,12 +323,10 @@ document.addEventListener('DOMContentLoaded', async () => {
     }
 
     // Fallback to basic command with custom paths
-    const ytDlpPath = 'C:\\AI\\YoutubeDL\\yt-dlp.exe';
-    const downloadPath = 'C:\\AI\\YoutubeDL\\Skool';
-    return `"${ytDlpPath}" -P "${downloadPath}" "${video.url}"`;
+    return `${shellQuote(ytDlpPath)} -P "${downloadPath}" ${shellQuote(video.url)}`;
   }
 
-  // Execute automatic download using Windows shell
+  // Create a local shell script for the download command
   async function executeAutomaticDownload(command) {
     return new Promise((resolve, reject) => {
       try {
@@ -343,7 +343,7 @@ document.addEventListener('DOMContentLoaded', async () => {
 
           if (response && response.success) {
             console.log('Automatic download started successfully');
-            resolve();
+            resolve(response.result || response);
           } else {
             console.error('Automatic download failed:', response?.error);
             reject(new Error(response?.error || 'Download failed'));
@@ -356,7 +356,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     });
   }
 
-  // Show success message for batch file creation
+  // Show success message for shell script creation
   function showBatchFileSuccess(result) {
     // Create a success popup
     const successDiv = document.createElement('div');
@@ -375,21 +375,21 @@ document.addEventListener('DOMContentLoaded', async () => {
     `;
 
     successDiv.innerHTML = `
-      <h3 style="margin: 0 0 12px 0; color: #059669;">✅ Download Batch File Created!</h3>
+      <h3 style="margin: 0 0 12px 0; color: #059669;">Download Script Created</h3>
       <p style="margin: 0 0 16px 0; color: #4b5563; font-size: 14px;">
-        A batch file has been created and downloaded to start your video download automatically.
+        A shell script has been created in your Downloads folder.
       </p>
       <div style="background: #f0fdf4; border: 1px solid #bbf7d0; border-radius: 6px; padding: 12px; margin-bottom: 16px;">
-        <strong style="color: #166534;">File:</strong> ${result.fileName || 'skool_download_*.bat'}<br>
-        <strong style="color: #166534;">Location:</strong> Your Downloads folder
+        <strong style="color: #166534;">File:</strong> ${result.fileName || 'video_download_*.command'}<br>
+        <strong style="color: #166534;">Saves to:</strong> ~/Downloads
       </div>
       <ol style="margin: 0 0 16px 0; padding-left: 20px; color: #4b5563; font-size: 14px;">
-        <li style="margin-bottom: 6px;">Find the <code style="background: #f3f4f6; padding: 2px 6px; border-radius: 3px;">.bat</code> file in your Downloads folder</li>
-        <li style="margin-bottom: 6px;"><strong>Double-click</strong> the batch file to start the download</li>
-        <li>The download will run automatically and save to: <strong>C:\\AI\\YoutubeDL\\Skool</strong></li>
+        <li style="margin-bottom: 6px;">Open Terminal</li>
+        <li style="margin-bottom: 6px;">Run <code style="background: #f3f4f6; padding: 2px 6px; border-radius: 3px;">bash ~/Downloads/${result.fileName || 'video_download_*.command'}</code></li>
+        <li>The video file will save to <strong>~/Downloads</strong></li>
       </ol>
       <p style="margin: 0 0 16px 0; color: #059669; font-size: 13px; font-weight: 500;">
-        🎯 The batch file contains your yt-dlp command and will execute it automatically!
+        The script contains the yt-dlp command for this video.
       </p>
       <button style="background: #059669; color: white; border: none; padding: 8px 16px; border-radius: 6px; cursor: pointer; width: 100%;"
               onclick="this.parentElement.remove();">

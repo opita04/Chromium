@@ -1,10 +1,10 @@
 {
   "manifest_version": 3,
-  "name": "Skool Video Downloader",
-  "version": "1.3.3",
-  "description": "Download Skool videos to your computer for offline viewing.",
-  "permissions": ["storage", "tabs"],
-  "host_permissions": ["https://*.skool.com/*"],
+  "name": "Video Downloader",
+  "version": "1.4.1",
+  "description": "Find downloadable videos on supported pages for offline viewing.",
+  "permissions": ["storage", "tabs", "downloads", "webRequest"],
+  "host_permissions": ["http://*/*", "https://*/*"],
   "background": {
     "service_worker": "background.js"
   },
@@ -18,7 +18,7 @@
   },
   "content_scripts": [
     {
-      "matches": ["https://www.skool.com/*"],
+      "matches": ["http://*/*", "https://*/*"],
       "js": [
         "js/utils.js",
         "js/providers/baseProvider.js",
@@ -27,6 +27,7 @@
         "js/providers/vimeoProvider.js",
         "js/providers/wistiaProvider.js",
         "js/providers/skoolProvider.js",
+        "js/providers/genericProvider.js",
         "js/providerRegistry.js",
         "js/locationDetectors.js",
         "js/videoDetection.js",
@@ -47,7 +48,7 @@
   "web_accessible_resources": [
     {
       "resources": ["styles.css"],
-      "matches": ["https://*.skool.com/*"]
+      "matches": ["http://*/*", "https://*/*"]
     }
   ]
 }

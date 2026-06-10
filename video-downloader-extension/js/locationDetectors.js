@@ -107,8 +107,13 @@ function detectVideosByLocation(registry) {
     } else if (location === 'community') {
         // Find all posts and detect videos in each
         const posts = findCommunityPosts();
-        
-        for (const post of posts) {
+
+        const containers = posts.length > 0 ? posts : [document.body];
+        if (posts.length === 0) {
+            console.log('🔍 No community containers found, scanning full page');
+        }
+
+        for (const post of containers) {
             const postVideos = detectVideosInElement(post, registry);
             videos.push(...postVideos);
         }

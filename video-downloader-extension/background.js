@@ -1,5 +1,63 @@
 // Background script for video downloading functionality
 
+const MEDIA_URL_PATTERN = /\.(mp4|m4v|mov|webm|mkv|m3u8|mpd)(?:$|[?#])/i;
+
+function looksLikeMediaRequest(details) {
+  const url = details.url || '';
+  return MEDIA_URL_PATTERN.test(url) || details.type === 'media';
+}
+
+function mediaTypeFromUrl(url) {
+  if (/\.m3u8(?:$|[?#])/i.test(url)) return 'hls';
+  if (/\.mpd(?:$|[?#])/i.test(url)) return 'dash';
+  return 'generic';
+}
+
+function storeDetectedMedia(tabId, pageUrl, mediaUrl) {
+  if (tabId < 0 || !mediaUrl) return;
+
+  const saveForPageUrl = (sourceUrl) => {
+    chrome.storage.local.get(['detectedVideos', 'detectedVideosSourceUrl'], (result) => {
+      const existingVideos = result.detectedVideosSourceUrl === sourceUrl ? (result.detectedVideos || []) : [];
+      if (existingVideos.some(video => video.url === mediaUrl)) return;
+
+      const type = mediaTypeFromUrl(mediaUrl);
+      const video = {
+        videoId: mediaUrl,
+        url: mediaUrl,
+        title: 'Detected Video Stream',
+        provider: type === 'generic' ? 'generic' : type,
+        providerName: type === 'generic' ? 'generic' : type,
+        type,
+        location: 'network'
+      };
+
+      const detectedVideos = [...existingVideos, video];
+      chrome.storage.local.set({
+        detectedVideos,
+        detectedVideosSourceUrl: sourceUrl,
+        lastDetection: Date.now()
+      });
+
+      chrome.action.setBadgeText({ text: String(detectedVideos.length), tabId });
+      chrome.action.setBadgeBackgroundColor({ color: '#4CAF50', tabId });
+    });
+  };
+
+  chrome.tabs.get(tabId, (tab) => {
+    saveForPageUrl(tab?.url || pageUrl || mediaUrl);
+  });
+}
+
+chrome.webRequest.onBeforeRequest.addListener(
+  (details) => {
+    if (looksLikeMediaRequest(details)) {
+      storeDetectedMedia(details.tabId, details.documentUrl || details.initiator || details.url, details.url);
+    }
+  },
+  { urls: ['http://*/*', 'https://*/*'], types: ['media', 'xmlhttprequest', 'other'] }
+);
+
 // Fetch Loom video metadata
 async function fetchLoomMetadata(videoId) {
   try {
@@ -33,41 +91,40 @@ async function fetchWistiaThumbnail(videoId) {
   return { thumbnail: null };
 }
 
-// Create and download batch file for automatic execution
+// Create and download a shell script for manual execution
 async function executeAutomaticDownload(command) {
   return new Promise((resolve, reject) => {
     try {
-      console.log('Creating download batch file for command:', command);
+      console.log('Creating download shell script for command:', command);
 
-      // Create batch file content with the download command
-      const batchContent = `@echo off
-echo Starting video download...
-echo Command: ${command}
-echo.
-echo Please wait while the video downloads...
-echo.
+      // Create macOS shell script content with the download command
+      const scriptContent = `#!/bin/bash
+set -e
 
-REM Execute the download command
+echo "Starting video download..."
+echo "Command: ${command.replace(/"/g, '\\"')}"
+echo
+echo "Please wait while the video downloads..."
+echo
+
 ${command}
 
-echo.
-echo Download completed!
-echo The video should be in: C:\\AI\\YoutubeDL\\Skool
-echo.
-pause
+echo
+echo "Download completed!"
+echo "The video should be in: $HOME/Downloads"
 `;
 
       // Generate unique filename
       const timestamp = new Date().getTime();
-      const batchFileName = `skool_download_${timestamp}.bat`;
+      const scriptFileName = `video_download_${timestamp}.command`;
 
       // Create blob and download
-      const blob = new Blob([batchContent], { type: 'text/plain' });
+      const blob = new Blob([scriptContent], { type: 'text/plain' });
       const url = URL.createObjectURL(blob);
 
       chrome.downloads.download({
         url: url,
-        filename: batchFileName,
+        filename: scriptFileName,
         saveAs: false
       }, (downloadId) => {
         if (chrome.runtime.lastError) {
@@ -76,7 +133,7 @@ pause
           return;
         }
 
-        console.log('Batch file created and downloaded:', batchFileName);
+        console.log('Download script created:', scriptFileName);
 
         // Clean up the blob URL
         URL.revokeObjectURL(url);
@@ -89,8 +146,8 @@ pause
         resolve({
           success: true,
           downloadId: downloadId,
-          fileName: batchFileName,
-          message: 'Batch file created! Double-click to start download.'
+          fileName: scriptFileName,
+          message: 'Download script created. Run it from Terminal to start download.'
         });
       });
 

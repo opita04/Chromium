@@ -101,3 +101,4 @@ videoProviderRegistry.register(new LoomProvider());
 videoProviderRegistry.register(new VimeoProvider());
 videoProviderRegistry.register(new WistiaProvider());
 videoProviderRegistry.register(new SkoolProvider());
+videoProviderRegistry.register(new GenericProvider());

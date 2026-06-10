@@ -26,7 +26,12 @@ function setupDynamicVideoDetection(callback) {
                             element.innerHTML?.includes('loom') ||
                             element.innerHTML?.includes('wistia') ||
                             element.innerHTML?.includes('skool') ||
+                            element.innerHTML?.includes('.mp4') ||
+                            element.innerHTML?.includes('.m3u8') ||
                             element.querySelector?.('[src*="blob:"]') ||
+                            element.querySelector?.('source[src]') ||
+                            element.querySelector?.('a[href*=".mp4"]') ||
+                            element.querySelector?.('a[href*=".m3u8"]') ||
                             element.querySelector?.('track[src*="video.skool.com"]')) {
                             shouldCheck = true;
                             break;
@@ -53,7 +58,7 @@ function setupDynamicVideoDetection(callback) {
         childList: true,
         subtree: true,
         attributes: true,
-        attributeFilter: ['src', 'data-src', 'data-video-id']
+        attributeFilter: ['src', 'href', 'data-src', 'data-video-id', 'data-video-url', 'data-hls-url']
     });
     
     return observer;

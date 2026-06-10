@@ -10,7 +10,7 @@ if (document.readyState === 'loading') {
 
 // Initialize video detection system
 function initializeVideoDetection() {
-    console.log('🎬 Initializing Skool Video Downloader...');
+    console.log('🎬 Initializing Video Downloader...');
     
     // Run initial detection after a short delay to ensure page is fully loaded
     setTimeout(() => {
@@ -77,6 +77,7 @@ function detectAndNotifyVideos() {
             // Store detected videos for popup
             chrome.storage.local.set({ 
                 detectedVideos: videos,
+                detectedVideosSourceUrl: window.location.href,
                 lastDetection: Date.now()
             });
             
@@ -87,6 +88,12 @@ function detectAndNotifyVideos() {
             });
         } else {
             console.log('❌ No videos found');
+
+            chrome.storage.local.set({
+                detectedVideos: [],
+                detectedVideosSourceUrl: window.location.href,
+                lastDetection: Date.now()
+            });
             
             // Clear badge when no videos found
             chrome.runtime.sendMessage({
