@@ -9,6 +9,22 @@
   const OVERLAY_ID = 'opita-webpage-summary-overlay';
   const BUTTON_ID = 'opita-webpage-summary-button';
   const CATEGORIES = ['Political', 'Coding', 'Educational', 'General', 'Business', 'AI', 'Finance', 'Health', 'Science', 'Others'];
+  const MODEL_PRESETS = [
+    ['DeepSeek', 'deepseek/deepseek-v4-flash', 'assets/model-icons/deepseek-color.svg'],
+    ['Qwen', 'qwen/qwen3.6-flash', 'assets/model-icons/qwen-color.png'],
+    ['Gemini', 'google/gemini-2.5-flash-lite', 'assets/model-icons/gemini-color.svg'],
+    ['Mistral', 'mistralai/mistral-small-24b-instruct-2501', 'assets/model-icons/mistral-color.svg'],
+    ['Nemotron', 'nvidia/nemotron-3-ultra-550b-a55b:free', null],
+    ['GPT-5', 'openai/gpt-5-nano', 'assets/model-icons/icons8-chatgpt.svg'],
+  ];
+  const AI_PLATFORMS = [
+    ['chatgpt', 'ChatGPT'],
+    ['claude', 'Claude'],
+    ['gemini', 'Gemini'],
+    ['mistral', 'Mistral'],
+    ['grok', 'Grok'],
+    ['deepseek', 'DeepSeek'],
+  ];
 
   let state = {
     source: null,
@@ -85,6 +101,27 @@
       .trim();
   }
 
+  function isJunkText(text) {
+    const value = cleanText(text);
+    if (!value) return true;
+    if (/^(advertisement|sponsored|related|read more|share this|comments|sign in)$/i.test(value)) return true;
+    if (/sign in.*submenu.*privacy policy/i.test(value)) return true;
+    if ((value.match(/\b(submenu|sign in|close|newsletter|cookie)\b/gi) || []).length >= 4) return true;
+    return false;
+  }
+
+  function uniqueBlocks(blocks) {
+    const unique = [];
+    const seen = new Set();
+    for (const block of blocks.map(cleanText).filter((text) => text.length >= 30 && !isJunkText(text))) {
+      const key = block.toLowerCase();
+      if (seen.has(key)) continue;
+      seen.add(key);
+      unique.push(block);
+    }
+    return unique;
+  }
+
   function removeClutter(root) {
     root.querySelectorAll([
       'script',
@@ -157,32 +194,40 @@
   }
 
   function extractTextFrom(node) {
-    const blocks = [];
     const accepted = 'h1, h2, h3, p, li, blockquote';
-    node.querySelectorAll(accepted).forEach((el) => {
+    const blocks = Array.from(node.querySelectorAll(accepted)).map((el) => {
       const text = cleanText(el.textContent);
-      if (text.length < 30 && !/^H[1-3]$/.test(el.tagName)) return;
-      if (/^(advertisement|sponsored|related|read more|share this|comments)$/i.test(text)) return;
-      blocks.push(text);
+      if (text.length < 30 && !/^H[1-3]$/.test(el.tagName)) return '';
+      return text;
     });
 
-    const unique = [];
-    const seen = new Set();
-    for (const block of blocks) {
-      const key = block.toLowerCase();
-      if (seen.has(key)) continue;
-      seen.add(key);
-      unique.push(block);
-    }
+    return cleanText(uniqueBlocks(blocks).join('\n\n'));
+  }
 
-    return cleanText(unique.join('\n\n'));
+  function extractFallbackText() {
+    const selectorGroups = [
+      'article h1, article h2, article h3, article p, article li, article blockquote',
+      'main h1, main h2, main h3, main p, main li, main blockquote',
+      '[role="main"] h1, [role="main"] h2, [role="main"] h3, [role="main"] p, [role="main"] li, [role="main"] blockquote',
+      '[itemprop="articleBody"] h1, [itemprop="articleBody"] h2, [itemprop="articleBody"] h3, [itemprop="articleBody"] p, [itemprop="articleBody"] li, [itemprop="articleBody"] blockquote',
+      '[class*="article" i] h1, [class*="article" i] h2, [class*="article" i] h3, [class*="article" i] p, [class*="article" i] li, [class*="article" i] blockquote',
+      '[class*="content" i] h1, [class*="content" i] h2, [class*="content" i] h3, [class*="content" i] p, [class*="content" i] li, [class*="content" i] blockquote',
+      'h1, h2, h3, p, blockquote',
+    ];
+
+    for (const selectors of selectorGroups) {
+      const blocks = uniqueBlocks(Array.from(document.querySelectorAll(selectors)).map((el) => el.textContent || ''));
+      const text = cleanText(blocks.join('\n\n'));
+      if (text.length >= 400) return text;
+    }
+    return '';
   }
 
   function extractWebpage() {
     const clone = document.cloneNode(true);
     removeClutter(clone);
     const content = bestContentNode(clone);
-    const text = extractTextFrom(content);
+    const text = extractTextFrom(content) || extractFallbackText();
     if (text.length < 400) {
       throw new Error('Could not find enough readable article text on this page.');
     }
@@ -217,6 +262,19 @@
         text,
       },
     };
+  }
+
+  async function extractWebpageWithRetry() {
+    let lastError = null;
+    for (let attempt = 0; attempt < 6; attempt += 1) {
+      try {
+        return extractWebpage();
+      } catch (error) {
+        lastError = error;
+        await sleep(500);
+      }
+    }
+    throw lastError || new Error('Could not find enough readable article text on this page.');
   }
 
   function ensureButtonStyles() {
@@ -320,9 +378,19 @@
       #${OVERLAY_ID} button.secondary { background: rgba(148, 163, 184, 0.16); color: #f8fafc; }
       #${OVERLAY_ID} button:disabled { cursor: wait; filter: grayscale(0.7); opacity: 0.7; }
       #${OVERLAY_ID} .wpso-controls { align-items: end; display: flex; flex-wrap: wrap; gap: 8px; }
+      #${OVERLAY_ID} .wpso-row { align-items: end; display: flex; flex-wrap: wrap; gap: 8px; min-width: 0; width: 100%; }
+      #${OVERLAY_ID} .wpso-model-icons { display: inline-flex; gap: 6px; }
+      #${OVERLAY_ID} .wpso-spacer { flex: 1 1 auto; min-width: 12px; }
       #${OVERLAY_ID} label { color: #94a3b8; display: grid; gap: 3px; font-size: 11px; }
       #${OVERLAY_ID} input, #${OVERLAY_ID} select { background: #020617; border: 1px solid rgba(148, 163, 184, 0.28); border-radius: 9px; color: #f8fafc; font: inherit; font-size: 12px; height: 34px; padding: 6px 9px; }
       #${OVERLAY_ID} input { width: min(360px, 54vw); }
+      #${OVERLAY_ID} input[type="hidden"] { display: none; width: auto; }
+      #${OVERLAY_ID} select { max-width: 145px; }
+      #${OVERLAY_ID} .wpso-icon-button { align-items: center; display: inline-flex; height: 34px; justify-content: center; min-height: 34px; padding: 0; width: 34px; }
+      #${OVERLAY_ID} .wpso-icon-button img { display: block; height: 19px; object-fit: contain; width: 19px; }
+      #${OVERLAY_ID} .wpso-model-badge { color: #d1fae5; font-size: 11px; font-weight: 900; line-height: 1; }
+      #${OVERLAY_ID} .wpso-icon-button[data-active="true"] { background: rgba(34, 197, 94, 0.2); box-shadow: inset 0 0 0 2px rgba(34, 197, 94, 0.72), 0 0 0 3px rgba(34, 197, 94, 0.12); }
+      #${OVERLAY_ID} .wpso-redo { padding-inline: 13px; }
       #${OVERLAY_ID} .wpso-body { min-height: 0; overflow: auto; padding: 22px 28px; }
       #${OVERLAY_ID} .wpso-summary { color: #e5e7eb; font-size: 15px; line-height: 1.65; }
       #${OVERLAY_ID} .wpso-summary h1 { color: #f8fafc; font-size: 26px; line-height: 1.2; margin: 0 0 18px; }
@@ -337,6 +405,7 @@
       @media (max-width: 760px) {
         #${OVERLAY_ID} .wpso-modal { height: calc(100vh - 20px); width: calc(100vw - 20px); }
         #${OVERLAY_ID} header, #${OVERLAY_ID} .wpso-controls, #${OVERLAY_ID} footer { padding-inline: 12px; }
+        #${OVERLAY_ID} .wpso-spacer { display: none; }
         #${OVERLAY_ID} input { width: 180px; }
       }
     `;
@@ -375,12 +444,45 @@
 
     const controls = document.createElement('div');
     controls.className = 'wpso-controls';
-    const modelLabel = document.createElement('label');
-    modelLabel.textContent = 'OpenRouter model';
+    const row = document.createElement('div');
+    row.className = 'wpso-row';
+
     const model = document.createElement('input');
+    model.type = 'hidden';
     model.dataset.role = 'model';
     model.value = DEFAULT_MODEL;
-    modelLabel.appendChild(model);
+    const modelIcons = document.createElement('div');
+    modelIcons.className = 'wpso-model-icons';
+    modelIcons.appendChild(model);
+
+    for (const [label, modelValue, iconPath] of MODEL_PRESETS) {
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.className = 'secondary wpso-icon-button';
+      button.title = `Redo with ${label}`;
+      button.setAttribute('aria-label', `Redo with ${label}`);
+      button.dataset.modelPreset = modelValue;
+      if (iconPath) {
+        const icon = document.createElement('img');
+        icon.alt = '';
+        icon.src = chrome.runtime.getURL(iconPath);
+        button.appendChild(icon);
+      } else {
+        const badge = document.createElement('span');
+        badge.className = 'wpso-model-badge';
+        badge.textContent = label.slice(0, 2).toUpperCase();
+        button.appendChild(badge);
+      }
+      button.addEventListener('click', () => runSummary({ force: true, model: modelValue }));
+      modelIcons.appendChild(button);
+    }
+    row.appendChild(modelIcons);
+
+    const spacer = document.createElement('span');
+    spacer.className = 'wpso-spacer';
+    spacer.setAttribute('aria-hidden', 'true');
+    row.appendChild(spacer);
+
     const categoryLabel = document.createElement('label');
     categoryLabel.textContent = 'Save folder';
     const category = document.createElement('select');
@@ -392,16 +494,43 @@
       category.appendChild(option);
     }
     categoryLabel.appendChild(category);
-    const redo = document.createElement('button');
-    redo.type = 'button';
-    redo.textContent = 'Redo summary';
-    redo.addEventListener('click', () => runSummary({ force: true }));
+    row.appendChild(categoryLabel);
+
     const move = document.createElement('button');
     move.type = 'button';
     move.className = 'secondary';
     move.textContent = 'Move to folder';
     move.addEventListener('click', moveToSelectedCategory);
-    controls.append(modelLabel, categoryLabel, redo, move);
+    row.appendChild(move);
+
+    const aiLabel = document.createElement('label');
+    aiLabel.textContent = 'Send page text to';
+    const aiSelect = document.createElement('select');
+    aiSelect.dataset.role = 'ai-platform';
+    for (const [id, name] of AI_PLATFORMS) {
+      const option = document.createElement('option');
+      option.value = id;
+      option.textContent = name;
+      aiSelect.appendChild(option);
+    }
+    aiLabel.appendChild(aiSelect);
+    row.appendChild(aiLabel);
+
+    const sendPageButton = document.createElement('button');
+    sendPageButton.type = 'button';
+    sendPageButton.className = 'secondary';
+    sendPageButton.textContent = 'Send page text';
+    sendPageButton.addEventListener('click', sendPageToSelectedAi);
+    row.appendChild(sendPageButton);
+
+    const redo = document.createElement('button');
+    redo.type = 'button';
+    redo.className = 'wpso-redo';
+    redo.textContent = 'Redo summary';
+    redo.addEventListener('click', () => runSummary({ force: true, model: model.value.trim() || DEFAULT_MODEL }));
+    row.appendChild(redo);
+
+    controls.append(row);
 
     const body = document.createElement('div');
     body.className = 'wpso-body';
@@ -535,7 +664,11 @@
     const path = overlayPart('path');
     if (title) title.textContent = state.source?.title || 'Webpage summary';
     if (meta) meta.textContent = state.source ? `${state.source.author || state.source.siteName || location.hostname} - ${state.source.url}` : '';
-    if (model) model.value = state.model || DEFAULT_MODEL;
+    const selectedModel = state.model || DEFAULT_MODEL;
+    if (model) model.value = selectedModel;
+    document.getElementById(OVERLAY_ID)?.querySelectorAll('[data-model-preset]').forEach((button) => {
+      button.dataset.active = button.dataset.modelPreset === selectedModel ? 'true' : 'false';
+    });
     if (category) category.value = CATEGORIES.includes(state.category) ? state.category : 'General';
     if (summary) renderMarkdown(state.markdown || '', summary);
     if (path) path.textContent = state.path ? `Saved: ${state.path}` : '';
@@ -558,7 +691,7 @@
     await runSummary({ force: false });
   }
 
-  async function runSummary({ force }) {
+  async function runSummary({ force, model = null }) {
     if (state.busy) return;
     if (!force) {
       const cached = await readCachedSummary();
@@ -575,10 +708,11 @@
     setProgress(10, 'Extracting readable page text...');
     try {
       await sleep(50);
-      const extracted = extractWebpage();
+      const extracted = await extractWebpageWithRetry();
       state.source = extracted.video;
       renderState(false);
-      const selectedModel = overlayPart('model')?.value.trim() || DEFAULT_MODEL;
+      const selectedModel = model || overlayPart('model')?.value.trim() || DEFAULT_MODEL;
+      state.model = selectedModel;
       setProgress(35, `Page text ready. Sending to ${selectedModel}...`);
       setBusy(true, `Sending page text to ${selectedModel}...`);
       const result = await sendMessage({ type: 'SUMMARIZE_AND_SAVE', video: state.source, model: selectedModel }, SUMMARY_RESPONSE_TIMEOUT_MS);
@@ -626,6 +760,60 @@
       await writeCachedSummary(state);
       renderState(false);
       setStatus(`Moved to ${state.category}/`);
+    } catch (error) {
+      setStatus(`Error: ${error.message}`);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  function buildPagePrompt(source) {
+    return [
+      'Please analyze this webpage/article text in a concise structured-analysis style.',
+      '',
+      'Use this exact Markdown shape:',
+      `# ${source.title || 'Untitled Page'}`,
+      '',
+      '## Takeaways',
+      '- 6-8 bullets. Start each bullet with a short bold label, then a colon, then the specific takeaway.',
+      '',
+      '## Key Points',
+      '- Group the main argument into 3-6 logical subheadings using "### A. ...", "### B. ...", etc.',
+      '- Under each subheading, use labeled bullets in the same "Label: explanation" style.',
+      '',
+      '### Final Observation',
+      '- End with one short synthesis paragraph.',
+      '',
+      `Title: ${source.title || 'Untitled Page'}`,
+      `Author/Site: ${source.author || source.siteName || location.hostname}`,
+      `URL: ${source.url || location.href}`,
+      '',
+      'Extracted page text:',
+      source.text,
+    ].join('\n');
+  }
+
+  async function ensurePageSource() {
+    if (state.source?.text) return state.source;
+    const extracted = await extractWebpageWithRetry();
+    state.source = extracted.video;
+    return state.source;
+  }
+
+  async function sendPageToSelectedAi() {
+    if (state.busy) return;
+    const platformId = overlayPart('ai-platform')?.value || 'chatgpt';
+    const platformName = AI_PLATFORMS.find(([id]) => id === platformId)?.[1] || 'AI chat';
+    setBusy(true, `Preparing page text for ${platformName}...`);
+    try {
+      const source = await ensurePageSource();
+      const result = await sendMessage({
+        type: 'OPEN_AI_PLATFORM',
+        platformId,
+        analysisPrompt: buildPagePrompt(source),
+      });
+      if (!result.ok) throw new Error(result.error || 'Could not open AI chat.');
+      setStatus(`Opened ${result.platform || platformName} and sent the page text.`);
     } catch (error) {
       setStatus(`Error: ${error.message}`);
     } finally {

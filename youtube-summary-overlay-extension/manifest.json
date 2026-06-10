@@ -88,7 +88,8 @@
         "assets/model-icons/*"
       ],
       "matches": [
-        "https://www.youtube.com/*"
+        "http://*/*",
+        "https://*/*"
       ]
     }
   ]
