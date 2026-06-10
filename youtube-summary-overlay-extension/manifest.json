@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "YouTube Summary Overlay",
-  "description": "Extract YouTube transcripts, summarize via OpenRouter, show in a page overlay, and save Markdown to Obsidian.",
+  "description": "Summarize YouTube transcripts and readable web pages via OpenRouter, show the result in an overlay, and save Markdown to Obsidian.",
   "version": "0.1.0",
   "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAxzkQO5C3BFa7jmTeanuxDlqSKivpRS+Ioj6kfppGtRM8UM5ERPR+AqdII4PnNMhu47vfsMjCuGLinq1hWajSDcZk3wTyCGYbLhfYHaHr7kMMsJmc5tY+D+vK3e7o8N265Mtpg38fAKZoWdMBgvfx2d0uC8sla8Qu0MST44B3R7TsEjH9Zc8ptXAbD9eEgslnnZ28vT7I0aT5BqnqGmMPmenvhKUI6OxqkI2TKs20IpSNi+gk4gOmmvFcefbm1Lc2f3f593lfk512jCAPTjySUmpeni9zpibWd6n5KO4pu9P7fG7v3AXw50jdvaLvpcVC7FBgZw4zi02lUUjxDyRb6QIDAQAB",
   "permissions": [
@@ -25,7 +25,7 @@
     "service_worker": "background/service-worker.js"
   },
   "action": {
-    "default_title": "Summarize YouTube video",
+    "default_title": "Summarize video or web page",
     "default_icon": {
       "16": "assets/icon.png",
       "32": "assets/icon.png",

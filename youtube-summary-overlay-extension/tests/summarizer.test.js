@@ -2,7 +2,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
-const { CATEGORIES, DEFAULT_MODEL, FALLBACK_MODEL, DEFAULT_OUTPUT_DIR, buildMarkdown, buildPrompt, classifyCategory, outputPathFor, saveMarkdown, updateMarkdownCategory } = require('../native/summarizer');
+const { CATEGORIES, DEFAULT_MODEL, FALLBACK_MODEL, DEFAULT_OUTPUT_DIR, buildMarkdown, buildPrompt, classifyCategory, normalizeSource, outputPathFor, saveMarkdown, updateMarkdownCategory } = require('../native/summarizer');
 
 assert.equal(DEFAULT_MODEL, 'mistralai/mistral-small-24b-instruct-2501');
 assert.equal(FALLBACK_MODEL, 'mistralai/mistral-small-24b-instruct-2501');
@@ -69,6 +69,44 @@ const legacyMarkdown = buildMarkdown({
 const legacySaved = saveMarkdown({ video, markdown: legacyMarkdown, outputDir: tmp, category: 'General' });
 assert.match(legacySaved.markdown, /## Transcript\n\nThis is a transcript about testing/);
 
+const webpage = {
+  sourceType: 'webpage',
+  title: 'Gemini for Home update arrives',
+  author: 'Android Police',
+  siteName: 'Android Police',
+  url: 'https://www.androidpolice.com/gemini-for-home-update-4-18/',
+  sourceId: 'https://www.androidpolice.com/gemini-for-home-update-4-18/',
+  text: 'Google is rolling out Gemini for Home features. The update adds smarter responses for home devices and improves assistant behavior.',
+};
+const normalizedPage = normalizeSource(webpage);
+assert.equal(normalizedPage.sourceType, 'webpage');
+assert.equal(normalizedPage.byline, 'Android Police');
+assert.equal(normalizedPage.transcript, '');
+
+const webpagePrompt = buildPrompt(webpage);
+assert.match(webpagePrompt, /extracted webpage\/article text/);
+assert.match(webpagePrompt, /Extracted page text:/);
+assert.doesNotMatch(webpagePrompt, /YouTube transcript/);
+
+const webpageMarkdown = buildMarkdown({
+  video: webpage,
+  model: 'test/model',
+  usage: {},
+  category: 'AI',
+  summaryMarkdown: '# Gemini for Home update arrives\n\n## Takeaways\n- **Smart home**: Gemini improves assistant behavior.',
+});
+assert.match(webpageMarkdown, /source: webpage/);
+assert.match(webpageMarkdown, /byline: "Android Police"/);
+assert.match(webpageMarkdown, /source_id:/);
+assert.match(webpageMarkdown, /## Source Text\n\nGoogle is rolling out Gemini for Home/);
+assert.doesNotMatch(webpageMarkdown, /Unknown Channel/);
+
+const webpageSaved = saveMarkdown({ video: webpage, markdown: webpageMarkdown, outputDir: tmp, category: 'AI' });
+assert.equal(webpageSaved.category, 'AI');
+assert.match(fs.readFileSync(webpageSaved.path, 'utf8'), /source: webpage/);
+assert.equal((webpageSaved.markdown.match(/## Source Text/g) || []).length, 1);
+assert.match(path.basename(outputPathFor(webpage, tmp, 'AI')), /Android Police - Gemini for Home update arrives/);
+
 const politicalVideo = {
   ...video,
   title: 'Election policy debate',
@@ -107,5 +145,6 @@ assert.equal(classifyCategory(generalVideo, markdown), 'General');
 assert.equal(outputPathFor(video, tmp, 'NotARealCategory').includes(`${path.sep}Others${path.sep}`), true);
 assert.doesNotMatch(buildMarkdown({ video: { ...video, channel: '' }, summaryMarkdown: '# Untitled', model: 'test/model', usage: {}, category: 'General' }), /Unknown Channel/);
 assert.equal(CATEGORIES.includes(classifyCategory(video, markdown)), true);
+assert.equal(classifyCategory(webpage, webpageMarkdown), 'AI');
 
 console.log('summarizer.test.js passed');

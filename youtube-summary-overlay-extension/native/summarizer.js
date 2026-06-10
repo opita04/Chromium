@@ -93,8 +93,9 @@ function scoreCategory(text, terms) {
 }
 
 function classifyCategory(video, summaryMarkdown = '') {
-  const title = `${video?.title || ''}\n${video?.channel || ''}`;
-  const body = `${summaryMarkdown || ''}\n${video?.transcript || ''}`;
+  const source = normalizeSource(video);
+  const title = `${source.title || ''}\n${source.byline || ''}`;
+  const body = `${summaryMarkdown || ''}\n${source.text || ''}`;
   const fullText = `${title}\n${body}`;
   const politicalTerms = ['election', 'president', 'congress', 'senate', 'government', 'policy', 'political', 'politics', 'democrat', 'republican', 'trump', 'biden', 'parliament', 'minister', 'sanctions', 'immigration', 'campaign', 'legislation', 'lawmakers'];
   const geopoliticalTerms = ['war', 'ukraine', 'israel', 'gaza', 'china', 'russia'];
@@ -120,7 +121,38 @@ function classifyCategory(video, summaryMarkdown = '') {
   return best[1] > 0 ? best[0] : 'General';
 }
 
+function normalizeSource(video = {}) {
+  const sourceType = video.sourceType === 'webpage' ? 'webpage' : 'youtube';
+  const text = String(video.text || video.transcript || '').trim();
+  const siteName = String(video.siteName || '').trim();
+  const author = String(video.author || '').trim();
+  const channel = String(video.channel || '').trim();
+  const byline = sourceType === 'webpage' ? (author || siteName || 'Web Page') : (channel || 'YouTube Channel');
+  const sourceId = sourceType === 'webpage' ? (video.sourceId || video.url || '') : (video.videoId || '');
+  return {
+    ...video,
+    sourceType,
+    sourceLabel: sourceType === 'webpage' ? 'webpage' : 'youtube',
+    title: String(video.title || (sourceType === 'webpage' ? 'Untitled Page' : 'Untitled Video')).trim(),
+    byline,
+    channel: sourceType === 'youtube' ? byline : '',
+    siteName,
+    author,
+    url: String(video.url || '').trim(),
+    sourceId: String(sourceId || '').trim(),
+    videoId: sourceType === 'youtube' ? String(video.videoId || '').trim() : '',
+    text,
+    transcript: sourceType === 'youtube' ? text : '',
+  };
+}
+
 function buildPrompt(video) {
+  const source = normalizeSource(video);
+  if (source.sourceType === 'webpage') return buildWebpagePrompt(source);
+  return buildYouTubePrompt(source);
+}
+
+function buildYouTubePrompt(video) {
   return `You are turning a YouTube transcript into Jaime's Obsidian research notes.
 
 Write a clear, structured analysis in the style of a concise analyst brief. The note should be easy to scan later: short sections, labeled bullets, concrete facts, and no bloated commentary.
@@ -158,7 +190,46 @@ Transcript:
 ${video.transcript}`;
 }
 
+function buildWebpagePrompt(source) {
+  return `You are turning extracted webpage/article text into Jaime's Obsidian research notes.
+
+Write a clear, structured analysis in the style of a concise analyst brief. The note should be easy to scan later: short sections, labeled bullets, concrete facts, and no bloated commentary.
+
+Return clean Markdown only. Use this exact structure and headings:
+
+# ${source.title}
+
+## Takeaways
+- 6-8 high-signal bullets.
+- Start each bullet with a short bold label, then a colon, then the actual takeaway.
+- Each bullet should make a specific claim from the page, not a generic topic label.
+- Include concrete names, numbers, dates, tools, examples, causal claims, or quoted phrases when they matter.
+
+## Key Points
+- Group the main argument into 3-6 logical subheadings using "### A. ...", "### B. ...", etc.
+- Under each subheading, use labeled bullets in the same "Label: explanation" style.
+- Preserve the important sequence of the article or page argument.
+- Capture the author's reasoning, evidence, examples, tensions, warnings, recommendations, and counterintuitive points.
+- Preserve enough context that the note is useful without reopening the page.
+
+### Final Observation
+- End with one short paragraph synthesizing the broader implication or unresolved question.
+
+Skip navigation text, ads, related links, cookie prompts, newsletter prompts, comments, and other page chrome if any slipped into the extraction.
+Do not invent details that are not in the source text. If the source text is thin or noisy, say so briefly.
+Summarize sensitive or political material neutrally and factually rather than refusing.
+
+Page metadata:
+Title: ${source.title}
+Author/Site: ${source.byline}
+URL: ${source.url}
+
+Extracted page text:
+${source.text}`;
+}
+
 async function requestOpenRouter({ video, model }) {
+  const source = normalizeSource(video);
   const apiKey = getOpenRouterApiKey();
   if (!apiKey) {
     throw new Error('Missing OPENROUTER_API_KEY. Add it to ~/.hermes/.env or macOS Keychain service openrouter.');
@@ -174,14 +245,14 @@ async function requestOpenRouter({ video, model }) {
     headers: {
       Authorization: `Bearer ${apiKey}`,
       'Content-Type': 'application/json',
-      'HTTP-Referer': 'https://www.youtube.com/',
-      'X-Title': 'YouTube Summary Overlay',
+      'HTTP-Referer': source.url || 'https://www.youtube.com/',
+      'X-Title': source.sourceType === 'webpage' ? 'Webpage Summary Overlay' : 'YouTube Summary Overlay',
     },
     body: JSON.stringify({
       model,
       messages: [
-        { role: 'system', content: 'You write accurate, concrete YouTube transcript analysis in Markdown for private research notes. Prioritize specificity, argument structure, and practical implications. For sensitive topics, summarize neutrally instead of refusing.' },
-        { role: 'user', content: buildPrompt(video) },
+        { role: 'system', content: 'You write accurate, concrete source analysis in Markdown for private research notes. Prioritize specificity, argument structure, and practical implications. For sensitive topics, summarize neutrally instead of refusing.' },
+        { role: 'user', content: buildPrompt(source) },
       ],
       temperature: 0.2,
       max_tokens: 2600,
@@ -216,11 +287,14 @@ async function callOpenRouter({ video, model = DEFAULT_MODEL }) {
 }
 
 function buildMarkdown({ video, summaryMarkdown, model, usage, category }) {
+  const source = normalizeSource(video);
   const generatedAt = new Date().toISOString();
   const body = summaryMarkdown.replace(/^```(?:markdown)?\s*/i, '').replace(/```\s*$/i, '').trim();
-  const safeCategory = CATEGORIES.includes(category) ? category : classifyCategory(video, body);
-  const transcriptSection = buildTranscriptSection(video?.transcript);
-  return `---\nsource: youtube\ntitle: ${JSON.stringify(video.title)}\nchannel: ${JSON.stringify(video.channel || 'YouTube Channel')}\nurl: ${JSON.stringify(video.url)}\nvideo_id: ${JSON.stringify(video.videoId || '')}\ncategory: ${JSON.stringify(safeCategory)}\nmodel: ${JSON.stringify(model || DEFAULT_MODEL)}\ngenerated_at: ${JSON.stringify(generatedAt)}\nusage: ${JSON.stringify(usage || {})}\n---\n\n${body}\n\n## Source\n\n- Channel: ${video.channel || 'YouTube Channel'}\n- URL: ${video.url}\n- Category: ${safeCategory}\n- Saved: ${generatedAt}${transcriptSection}\n`;
+  const safeCategory = CATEGORIES.includes(category) ? category : classifyCategory(source, body);
+  const idLine = source.sourceType === 'youtube' ? `video_id: ${JSON.stringify(source.videoId || '')}\n` : `source_id: ${JSON.stringify(source.sourceId || '')}\n`;
+  const bylineKey = source.sourceType === 'youtube' ? 'channel' : 'byline';
+  const sourceTextSection = buildSourceTextSection(source);
+  return `---\nsource: ${source.sourceLabel}\ntitle: ${JSON.stringify(source.title)}\n${bylineKey}: ${JSON.stringify(source.byline)}\nurl: ${JSON.stringify(source.url)}\n${idLine}category: ${JSON.stringify(safeCategory)}\nmodel: ${JSON.stringify(model || DEFAULT_MODEL)}\ngenerated_at: ${JSON.stringify(generatedAt)}\nusage: ${JSON.stringify(usage || {})}\n---\n\n${body}\n\n## Source\n\n- ${source.sourceType === 'youtube' ? 'Channel' : 'Author/Site'}: ${source.byline}\n- URL: ${source.url}\n- Category: ${safeCategory}\n- Saved: ${generatedAt}${sourceTextSection}\n`;
 }
 
 function buildTranscriptSection(transcript) {
@@ -229,18 +303,29 @@ function buildTranscriptSection(transcript) {
   return `\n\n## Transcript\n\n${text}\n`;
 }
 
-function ensureTranscriptSection(markdown, video) {
+function buildSourceTextSection(video) {
+  const source = normalizeSource(video);
+  if (source.sourceType === 'youtube') return buildTranscriptSection(source.text);
+  if (!source.text) return '';
+  return `\n\n## Source Text\n\n${source.text}\n`;
+}
+
+function ensureSourceTextSection(markdown, video) {
   const text = String(markdown || '');
-  if (!String(video?.transcript || '').trim() || /^## Transcript\s*$/im.test(text)) return text;
-  return `${text.replace(/\s*$/, '')}${buildTranscriptSection(video.transcript)}`;
+  const source = normalizeSource(video);
+  if (!source.text) return text;
+  if (source.sourceType === 'youtube' && /^## Transcript\s*$/im.test(text)) return text;
+  if (source.sourceType === 'webpage' && /^## Source Text\s*$/im.test(text)) return text;
+  return `${text.replace(/\s*$/, '')}${buildSourceTextSection(source)}`;
 }
 
 function outputPathFor(video, outputDir = DEFAULT_OUTPUT_DIR, category = 'General') {
+  const source = normalizeSource(video);
   const date = isoDate();
-  const title = sanitizeFilePart(video.title, 'youtube-summary');
-  const channel = sanitizeFilePart(video.channel, 'youtube-channel');
+  const title = sanitizeFilePart(source.title, source.sourceType === 'webpage' ? 'webpage-summary' : 'youtube-summary');
+  const byline = sanitizeFilePart(source.byline, source.sourceType === 'webpage' ? 'webpage' : 'youtube-channel');
   const folder = CATEGORIES.includes(category) ? category : 'Others';
-  return path.join(outputDir, folder, `${date} - ${channel} - ${title}.md`);
+  return path.join(outputDir, folder, `${date} - ${byline} - ${title}.md`);
 }
 
 function updateMarkdownCategory(markdown, category) {
@@ -270,7 +355,7 @@ function isSafePreviousPath(previousPath, outputDir) {
 
 function saveMarkdown({ video, markdown, outputDir = DEFAULT_OUTPUT_DIR, category, previousPath }) {
   const safeCategory = CATEGORIES.includes(category) ? category : classifyCategory(video, markdown);
-  const markdownWithCategory = ensureTranscriptSection(updateMarkdownCategory(markdown, safeCategory), video);
+  const markdownWithCategory = ensureSourceTextSection(updateMarkdownCategory(markdown, safeCategory), video);
   const targetPath = outputPathFor(video, outputDir, safeCategory);
   fs.mkdirSync(path.dirname(targetPath), { recursive: true });
   fs.writeFileSync(targetPath, markdownWithCategory.endsWith('\n') ? markdownWithCategory : `${markdownWithCategory}\n`, 'utf8');
@@ -283,11 +368,12 @@ function saveMarkdown({ video, markdown, outputDir = DEFAULT_OUTPUT_DIR, categor
 }
 
 async function summarizeAndSave({ video, model = DEFAULT_MODEL, outputDir = DEFAULT_OUTPUT_DIR }) {
-  if (!video?.transcript) throw new Error('No transcript provided.');
-  const result = await callOpenRouter({ video, model });
-  const category = classifyCategory(video, result.markdown);
-  const markdown = buildMarkdown({ video, summaryMarkdown: result.markdown, model: result.model, usage: result.usage, category });
-  const saved = saveMarkdown({ video, markdown, outputDir, category });
+  const source = normalizeSource(video);
+  if (!source.text) throw new Error(source.sourceType === 'webpage' ? 'No webpage text provided.' : 'No transcript provided.');
+  const result = await callOpenRouter({ video: source, model });
+  const category = classifyCategory(source, result.markdown);
+  const markdown = buildMarkdown({ video: source, summaryMarkdown: result.markdown, model: result.model, usage: result.usage, category });
+  const saved = saveMarkdown({ video: source, markdown, outputDir, category });
   return { ok: true, markdown, path: saved.path, category: saved.category, model: result.model, usage: result.usage };
 }
 
@@ -301,6 +387,7 @@ module.exports = {
   callOpenRouter,
   classifyCategory,
   getOpenRouterApiKey,
+  normalizeSource,
   outputPathFor,
   saveMarkdown,
   summarizeAndSave,

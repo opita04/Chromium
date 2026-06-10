@@ -1,17 +1,19 @@
 # YouTube Summary Overlay
 
-Chromium extension for Jaime's daily YouTube summary workflow.
+Chromium extension for Jaime's daily YouTube and readable web-page summary workflow.
 
 ## What it does
 
 - Adds a compact circular **S** button on the right side of YouTube watch pages, so you do not have to use only the browser extension icon.
 - Clicking the YouTube-page button or extension button starts the summary run in the background.
+- Clicking the extension button on a normal `http` or `https` article page extracts readable page text, summarizes it, and saves it with the same native OpenRouter/Obsidian pipeline.
 - The button changes to progress text like `5%`, `10%`, `35%`, etc. while it works.
 - The large overlay/modal opens only after the summary is ready, so you do not see a half-loaded panel.
 - The overlay shows normally formatted headings and bullets, not raw Markdown or the transcript.
 - Closing and reopening the overlay reloads the cached result for that video from extension storage; it does not rerun the LLM unless you click a redo model button or “Redo summary”.
 - Extracts the YouTube transcript and uses a more robust channel-name fallback for modern YouTube/collaboration pages.
-- Sends transcript to OpenRouter via the native host.
+- Extracts readable article/page text by removing common navigation, ads, comments, related links, sidebars, forms, and other page chrome before summarizing.
+- Sends transcript or webpage text to OpenRouter via the native host.
 - Adds an optional overlay dropdown to send the full transcript prompt to ChatGPT, Claude, Gemini, Mistral, Grok, or DeepSeek.
 - Uses the default model: `mistralai/mistral-small-24b-instruct-2501`. Nemotron remains available as a preset, with a timeout fallback to Mistral if OpenRouter queues it too long.
 - Adds overlay redo buttons for DeepSeek V4 Flash, Qwen Flash, Gemini Lite, Mistral Small, Nemotron 3 Ultra, and GPT-5 Nano.
@@ -26,7 +28,7 @@ Chromium extension for Jaime's daily YouTube summary workflow.
 
 ```md
 ---
-source: youtube
+source: youtube # or webpage
 category: "Educational"
 ...
 ---
@@ -40,7 +42,7 @@ category: "Educational"
 - ...
 
 ## Source
-- Channel: ...
+- Channel: ... # or Author/Site: ...
 - URL: ...
 ```
 
@@ -51,6 +53,8 @@ Political, Coding, Educational, General, Business, AI, Finance, Health, Science,
 ```
 
 Political content is always routed to `Political/` when the title, transcript, or summary has political signals. If the category is wrong, use the overlay “Save folder” dropdown and click “Move to folder”; it updates the Markdown frontmatter and removes the previous saved copy from the old category folder.
+
+Web-page extraction is best effort. It works best on text-heavy article pages with real paragraph content. Browser internal pages, paywalled previews, and heavily client-rendered pages may expose too little readable text to summarize.
 
 ## Install / reload
 

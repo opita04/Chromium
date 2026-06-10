@@ -44,6 +44,25 @@ async function openOverlayInTab(tab) {
   return chrome.tabs.sendMessage(tab.id, { type: 'OPEN_SUMMARY_OVERLAY' });
 }
 
+function isWebPageUrl(url) {
+  return /^https?:\/\//i.test(url || '');
+}
+
+async function openSummaryInTab(tab) {
+  if (!tab?.id) throw new Error('No active tab.');
+  if (/^https:\/\/www\.youtube\.com\/watch\b/.test(tab.url || '')) {
+    return openOverlayInTab(tab);
+  }
+  if (!isWebPageUrl(tab.url)) {
+    throw new Error('Open a YouTube video or regular web page first.');
+  }
+  await chrome.scripting.executeScript({
+    target: { tabId: tab.id },
+    files: ['content/webpage-summary.js'],
+  });
+  return chrome.tabs.sendMessage(tab.id, { type: 'OPEN_WEBPAGE_SUMMARY_OVERLAY' });
+}
+
 function openAiPlatform(platformId, analysisPrompt) {
   const platform = AI_PLATFORMS.find((candidate) => candidate.id === platformId);
   if (!platform) throw new Error('Unknown AI platform.');
@@ -81,7 +100,7 @@ function openAiPlatform(platformId, analysisPrompt) {
 }
 
 chrome.action.onClicked.addListener((tab) => {
-  openOverlayInTab(tab).catch(() => {});
+  openSummaryInTab(tab).catch(() => {});
 });
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
