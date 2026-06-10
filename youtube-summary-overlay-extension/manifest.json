@@ -50,6 +50,25 @@
     },
     {
       "matches": [
+        "http://*/*",
+        "https://*/*"
+      ],
+      "exclude_matches": [
+        "https://www.youtube.com/*",
+        "https://chat.openai.com/*",
+        "https://chatgpt.com/*",
+        "https://claude.ai/*",
+        "https://gemini.google.com/*",
+        "https://chat.mistral.ai/*",
+        "https://grok.com/*",
+        "https://chat.deepseek.com/*"
+      ],
+      "js": [
+        "content/webpage-summary.js"
+      ]
+    },
+    {
+      "matches": [
         "https://chat.openai.com/*",
         "https://chatgpt.com/*",
         "https://claude.ai/*",

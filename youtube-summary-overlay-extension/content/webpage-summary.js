@@ -6,6 +6,7 @@
 
   const DEFAULT_MODEL = 'mistralai/mistral-small-24b-instruct-2501';
   const OVERLAY_ID = 'opita-webpage-summary-overlay';
+  const BUTTON_ID = 'opita-webpage-summary-button';
   const CATEGORIES = ['Political', 'Coding', 'Educational', 'General', 'Business', 'AI', 'Finance', 'Health', 'Science', 'Others'];
 
   let state = {
@@ -208,6 +209,91 @@
     };
   }
 
+  function ensureButtonStyles() {
+    if (document.getElementById(`${BUTTON_ID}-style`)) return;
+    const style = document.createElement('style');
+    style.id = `${BUTTON_ID}-style`;
+    style.textContent = `
+      #${BUTTON_ID} {
+        align-items: center;
+        background:
+          radial-gradient(circle at 32% 24%, rgba(255,255,255,0.92) 0 9%, transparent 10%),
+          linear-gradient(145deg, #0f766e 0%, #2563eb 52%, #f59e0b 100%);
+        border: 1px solid rgba(255,255,255,0.34);
+        border-radius: 999px;
+        box-shadow: 0 10px 26px rgba(2,6,23,0.34), 0 0 0 5px rgba(13,148,136,0.14);
+        color: #fff;
+        cursor: pointer;
+        display: flex;
+        font: 900 14px/1 -apple-system, BlinkMacSystemFont, "SF Pro Text", Segoe UI, sans-serif;
+        height: 46px;
+        justify-content: center;
+        letter-spacing: 0;
+        padding: 0;
+        position: fixed;
+        right: 18px;
+        text-shadow: 0 1px 8px rgba(2,6,23,0.35);
+        top: 42%;
+        transition: box-shadow 120ms ease, transform 120ms ease, filter 120ms ease;
+        width: 46px;
+        z-index: 2147483646;
+      }
+      #${BUTTON_ID}::after {
+        background: rgba(2,6,23,0.38);
+        border: 1px solid rgba(255,255,255,0.26);
+        border-radius: inherit;
+        content: "";
+        inset: 5px;
+        position: absolute;
+        z-index: -1;
+      }
+      #${BUTTON_ID}:hover { box-shadow: 0 13px 30px rgba(2,6,23,0.42), 0 0 0 6px rgba(245,158,11,0.18); filter: saturate(1.08); transform: translateY(-1px); }
+      #${BUTTON_ID}:focus-visible { outline: 3px solid rgba(245,158,11,0.72); outline-offset: 3px; }
+      #${BUTTON_ID}[disabled] { cursor: wait; opacity: 0.92; }
+      #${BUTTON_ID}.is-done { background: linear-gradient(145deg, #047857, #22c55e); box-shadow: 0 10px 26px rgba(2,6,23,0.34), 0 0 0 5px rgba(34,197,94,0.16); }
+      #${BUTTON_ID}.is-error { background: linear-gradient(145deg, #b91c1c, #f97316); box-shadow: 0 10px 26px rgba(2,6,23,0.34), 0 0 0 5px rgba(249,115,22,0.17); }
+    `;
+    document.documentElement.appendChild(style);
+  }
+
+  function setActionButton(text, stateClass = '') {
+    const button = document.getElementById(BUTTON_ID);
+    if (!button) return;
+    const compactText = text === 'Error' ? '!' : text === 'Summarize page' || text === 'Open Summary' ? 'S' : text;
+    button.textContent = compactText;
+    button.title = text;
+    button.setAttribute('aria-label', text);
+    button.className = stateClass;
+    button.disabled = state.busy;
+  }
+
+  function setProgress(percent, message = '') {
+    const clamped = Math.max(0, Math.min(100, Math.round(percent)));
+    setActionButton(`${clamped}%`, '');
+    if (message) setStatus(message);
+  }
+
+  function ensureActionButton() {
+    if (!/^https?:$/i.test(location.protocol)) return null;
+    ensureButtonStyles();
+    let button = document.getElementById(BUTTON_ID);
+    if (button) return button;
+    button = document.createElement('button');
+    button.id = BUTTON_ID;
+    button.type = 'button';
+    button.textContent = 'S';
+    button.title = 'Summarize page';
+    button.setAttribute('aria-label', 'Summarize page');
+    button.addEventListener('click', () => {
+      showOverlay().catch((error) => {
+        console.error('Webpage summary failed:', error);
+        setActionButton('Error', 'is-error');
+      });
+    });
+    document.documentElement.appendChild(button);
+    return button;
+  }
+
   function applyStyles(root) {
     if (root.querySelector('style')) return;
     const style = document.createElement('style');
@@ -343,6 +429,8 @@
     document.getElementById(OVERLAY_ID)?.querySelectorAll('button, input, select').forEach((el) => {
       el.disabled = isBusy;
     });
+    const actionButton = ensureActionButton();
+    if (actionButton) actionButton.disabled = isBusy;
     const progress = overlayPart('progress');
     if (progress) progress.hidden = !isBusy;
     if (message) setStatus(message);
@@ -441,7 +529,10 @@
     if (category) category.value = CATEGORIES.includes(state.category) ? state.category : 'General';
     if (summary) renderMarkdown(state.markdown || '', summary);
     if (path) path.textContent = state.path ? `Saved: ${state.path}` : '';
-    if (state.markdown) setStatus(fromCache ? 'Loaded cached summary. It did not rerun.' : `Done. Category: ${state.category}`);
+    if (state.markdown) {
+      setStatus(fromCache ? 'Loaded cached summary. It did not rerun.' : `Done. Category: ${state.category}`);
+      setActionButton('Open Summary', 'is-done');
+    }
   }
 
   async function showOverlay() {
@@ -471,15 +562,18 @@
 
     buildOverlay().hidden = false;
     setBusy(true, 'Extracting readable page text...');
+    setProgress(10, 'Extracting readable page text...');
     try {
       await sleep(50);
       const extracted = extractWebpage();
       state.source = extracted.video;
       renderState(false);
       const selectedModel = overlayPart('model')?.value.trim() || DEFAULT_MODEL;
+      setProgress(35, `Page text ready. Sending to ${selectedModel}...`);
       setBusy(true, `Sending page text to ${selectedModel}...`);
       const result = await sendMessage({ type: 'SUMMARIZE_AND_SAVE', video: state.source, model: selectedModel });
       if (!result.ok) throw new Error(result.error || 'Summarize failed.');
+      setProgress(90, 'Saving Markdown note...');
       state = {
         ...state,
         markdown: result.markdown || '',
@@ -489,8 +583,10 @@
         busy: false,
       };
       await writeCachedSummary(state);
+      setProgress(100, 'Summary ready.');
       renderState(false);
     } catch (error) {
+      setActionButton('Error', 'is-error');
       setStatus(`Error: ${error.message}`);
     } finally {
       setBusy(false);
@@ -526,6 +622,8 @@
       setBusy(false);
     }
   }
+
+  ensureActionButton();
 
   chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     if (message?.type === 'OPEN_WEBPAGE_SUMMARY_OVERLAY') {
