@@ -2,10 +2,11 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
-const { CATEGORIES, DEFAULT_MODEL, FALLBACK_MODEL, DEFAULT_OUTPUT_DIR, buildMarkdown, buildPrompt, classifyCategory, normalizeSource, outputPathFor, saveMarkdown, systemPromptFor, updateMarkdownCategory } = require('../native/summarizer');
+const { CATEGORIES, CONTEXT_LENGTH_FALLBACK_MODEL, DEFAULT_MODEL, FALLBACK_MODEL, DEFAULT_OUTPUT_DIR, buildMarkdown, buildPrompt, callOpenRouter, classifyCategory, normalizeSource, outputPathFor, saveMarkdown, systemPromptFor, updateMarkdownCategory } = require('../native/summarizer');
 
 assert.equal(DEFAULT_MODEL, 'mistralai/mistral-small-24b-instruct-2501');
 assert.equal(FALLBACK_MODEL, 'mistralai/mistral-small-24b-instruct-2501');
+assert.equal(CONTEXT_LENGTH_FALLBACK_MODEL, 'google/gemini-2.5-flash-lite');
 assert.equal(DEFAULT_OUTPUT_DIR, '/Users/opita/Documents/Obsidian/youtube-summaries');
 assert.equal(CATEGORIES.length, 10);
 
@@ -57,7 +58,8 @@ assert.equal(fs.existsSync(moved.path), true);
 assert.equal(fs.existsSync(result.path), false);
 assert.match(moved.markdown, /category: "Coding"/);
 assert.match(fs.readFileSync(moved.path, 'utf8'), /category: "Coding"/);
-assert.equal((moved.markdown.match(/## Transcript/g) || []).length, 1);
+assert.equal((moved.markdown.match(/## Transcript/g) || []).length, 0);
+assert.equal((fs.readFileSync(moved.path, 'utf8').match(/## Transcript/g) || []).length, 1);
 assert.match(updateMarkdownCategory(markdown, 'General'), /category: "General"/);
 
 const legacyMarkdown = buildMarkdown({
@@ -68,7 +70,8 @@ const legacyMarkdown = buildMarkdown({
   summaryMarkdown: '# Legacy\n\n## Takeaways\n- Existing note.',
 });
 const legacySaved = saveMarkdown({ video, markdown: legacyMarkdown, outputDir: tmp, category: 'General' });
-assert.match(legacySaved.markdown, /## Transcript\n\nThis is a transcript about testing/);
+assert.doesNotMatch(legacySaved.markdown, /## Transcript\n\nThis is a transcript about testing/);
+assert.match(fs.readFileSync(legacySaved.path, 'utf8'), /## Transcript\n\nThis is a transcript about testing/);
 
 const webpage = {
   sourceType: 'webpage',
@@ -106,7 +109,8 @@ assert.doesNotMatch(webpageMarkdown, /Unknown Channel/);
 const webpageSaved = saveMarkdown({ video: webpage, markdown: webpageMarkdown, outputDir: tmp, category: 'AI' });
 assert.equal(webpageSaved.category, 'AI');
 assert.match(fs.readFileSync(webpageSaved.path, 'utf8'), /source: webpage/);
-assert.equal((webpageSaved.markdown.match(/## Source Text/g) || []).length, 1);
+assert.equal((webpageSaved.markdown.match(/## Source Text/g) || []).length, 0);
+assert.equal((fs.readFileSync(webpageSaved.path, 'utf8').match(/## Source Text/g) || []).length, 1);
 assert.match(path.basename(outputPathFor(webpage, tmp, 'AI')), /Android Police - Gemini for Home update arrives/);
 
 const politicalVideo = {
@@ -149,4 +153,90 @@ assert.doesNotMatch(buildMarkdown({ video: { ...video, channel: '' }, summaryMar
 assert.equal(CATEGORIES.includes(classifyCategory(video, markdown)), true);
 assert.equal(classifyCategory(webpage, webpageMarkdown), 'AI');
 
-console.log('summarizer.test.js passed');
+async function testContextLengthFallback() {
+  const originalFetch = global.fetch;
+  const originalApiKey = process.env.OPENROUTER_API_KEY;
+  const calls = [];
+  process.env.OPENROUTER_API_KEY = 'test-key';
+  global.fetch = async (_url, options) => {
+    const body = JSON.parse(options.body);
+    calls.push(body.model);
+    if (calls.length === 1) {
+      return {
+        ok: false,
+        status: 400,
+        statusText: 'Bad Request',
+        json: async () => ({
+          error: {
+            metadata: {
+              raw: "This endpoint's maximum context length is 32768 tokens. However, you requested about 37646 tokens (35046 of text input, 2600 in the output).",
+            },
+          },
+        }),
+      };
+    }
+    return {
+      ok: true,
+      status: 200,
+      json: async () => ({
+        choices: [{ message: { content: '# Fallback summary' } }],
+        usage: { prompt_tokens: 20, completion_tokens: 4 },
+      }),
+    };
+  };
+
+  try {
+    const result = await callOpenRouter({ video, model: 'too-small/context-model' });
+    assert.equal(result.model, CONTEXT_LENGTH_FALLBACK_MODEL);
+    assert.equal(result.markdown, '# Fallback summary');
+    assert.deepEqual(calls, ['too-small/context-model', CONTEXT_LENGTH_FALLBACK_MODEL]);
+  } finally {
+    global.fetch = originalFetch;
+    if (originalApiKey === undefined) {
+      delete process.env.OPENROUTER_API_KEY;
+    } else {
+      process.env.OPENROUTER_API_KEY = originalApiKey;
+    }
+  }
+}
+
+async function testPreviousDefaultNormalizesToMistral() {
+  const originalFetch = global.fetch;
+  const originalApiKey = process.env.OPENROUTER_API_KEY;
+  const calls = [];
+  process.env.OPENROUTER_API_KEY = 'test-key';
+  global.fetch = async (_url, options) => {
+    const body = JSON.parse(options.body);
+    calls.push(body.model);
+    return {
+      ok: true,
+      status: 200,
+      json: async () => ({
+        choices: [{ message: { content: '# Mistral summary' } }],
+        usage: { prompt_tokens: 12, completion_tokens: 3 },
+      }),
+    };
+  };
+
+  try {
+    const result = await callOpenRouter({ video, model: 'nvidia/nemotron-3-ultra-550b-a55b:free' });
+    assert.equal(result.model, DEFAULT_MODEL);
+    assert.deepEqual(calls, [DEFAULT_MODEL]);
+  } finally {
+    global.fetch = originalFetch;
+    if (originalApiKey === undefined) {
+      delete process.env.OPENROUTER_API_KEY;
+    } else {
+      process.env.OPENROUTER_API_KEY = originalApiKey;
+    }
+  }
+}
+
+(async () => {
+  await testContextLengthFallback();
+  await testPreviousDefaultNormalizesToMistral();
+  console.log('summarizer.test.js passed');
+})().catch((error) => {
+  console.error(error);
+  process.exit(1);
+});

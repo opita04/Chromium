@@ -1,5 +1,7 @@
 const HOST_NAME = 'com.opita.youtube_summary_sidepanel';
-const NATIVE_MESSAGE_TIMEOUT_MS = 30000;
+const DEFAULT_MODEL = 'mistralai/mistral-small-24b-instruct-2501';
+const PREVIOUS_DEFAULT_MODELS = new Set(['nvidia/nemotron-3-ultra-550b-a55b:free']);
+const NATIVE_MESSAGE_TIMEOUT_MS = 45000;
 const AI_PLATFORMS = [
   { id: 'chatgpt', name: 'ChatGPT', url: 'https://chatgpt.com/?model=gpt-4o-mini&quicktube' },
   { id: 'claude', name: 'Claude', url: 'https://claude.ai/chats' },
@@ -8,6 +10,10 @@ const AI_PLATFORMS = [
   { id: 'grok', name: 'Grok', url: 'https://grok.com/' },
   { id: 'deepseek', name: 'DeepSeek', url: 'https://chat.deepseek.com/?quicktube' },
 ];
+
+function effectiveModel(model) {
+  return model && !PREVIOUS_DEFAULT_MODELS.has(model) ? model : DEFAULT_MODEL;
+}
 
 async function getActiveYouTubeTab() {
   const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
@@ -126,7 +132,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       const result = await sendNativeMessage({
         type: 'summarizeAndSave',
         video: message.video,
-        model: message.model,
+        model: effectiveModel(message.model),
       });
       sendResponse(result);
       return;

@@ -3,14 +3,14 @@
 
   const DEFAULT_MODEL = 'mistralai/mistral-small-24b-instruct-2501';
   const PREVIOUS_DEFAULT_MODELS = new Set(['nvidia/nemotron-3-ultra-550b-a55b:free']);
-  const SUMMARY_RESPONSE_TIMEOUT_MS = 35000;
+  const SUMMARY_RESPONSE_TIMEOUT_MS = 50000;
   const CATEGORIES = ['Political', 'Coding', 'Educational', 'General', 'Business', 'AI', 'Finance', 'Health', 'Science', 'Others'];
   const MODEL_PRESETS = [
     ['DeepSeek', 'deepseek/deepseek-v4-flash', 'assets/model-icons/deepseek-color.svg'],
     ['Qwen', 'qwen/qwen3.6-flash', 'assets/model-icons/qwen-color.png'],
     ['Gemini', 'google/gemini-2.5-flash-lite', 'assets/model-icons/gemini-color.svg'],
     ['Mistral', 'mistralai/mistral-small-24b-instruct-2501', 'assets/model-icons/mistral-color.svg'],
-    ['Nemotron', 'nvidia/nemotron-3-ultra-550b-a55b:free', null],
+    ['Free Route', 'openrouter/free', null],
     ['GPT-5', 'openai/gpt-5-nano', 'assets/model-icons/icons8-chatgpt.svg'],
   ];
   const AI_PLATFORMS = [
@@ -379,6 +379,12 @@
       #${BUTTON_ID}[disabled] { cursor: wait; opacity: 0.92; }
       #${BUTTON_ID}.is-done { background: linear-gradient(145deg, #047857, #22c55e); box-shadow: 0 10px 26px rgba(2,6,23,0.34), 0 0 0 5px rgba(34,197,94,0.16); }
       #${BUTTON_ID}.is-error { background: linear-gradient(145deg, #b91c1c, #f97316); box-shadow: 0 10px 26px rgba(2,6,23,0.34), 0 0 0 5px rgba(249,115,22,0.17); }
+      #${BUTTON_ID}.is-dragging {
+        cursor: grabbing !important;
+        transform: scale(1.08) !important;
+        box-shadow: 0 15px 35px rgba(2,6,23,0.5), 0 0 0 6px rgba(245,158,11,0.25) !important;
+        transition: none !important;
+      }
     `;
     document.documentElement.appendChild(style);
   }
@@ -411,12 +417,109 @@
     button.textContent = 'S';
     button.title = 'Summarize video';
     button.setAttribute('aria-label', 'Summarize video');
-    button.addEventListener('click', () => {
+
+    // Restore saved position
+    const storage = storageLocal();
+    if (storage) {
+      storage.get('summaryButtonPosition', (data) => {
+        const pos = data.summaryButtonPosition;
+        if (pos && typeof pos.top === 'string' && typeof pos.left === 'string') {
+          button.style.top = pos.top;
+          button.style.left = pos.left;
+          button.style.right = 'auto';
+          button.style.bottom = 'auto';
+        }
+      });
+    }
+
+    // Add unified pointer drag support
+    button.addEventListener('pointerdown', (e) => {
+      if (e.button !== 0) return; // Only left click
+
+      const rect = button.getBoundingClientRect();
+      const startX = e.clientX;
+      const startY = e.clientY;
+      const startLeft = rect.left;
+      const startTop = rect.top;
+
+      let hasDragged = false;
+      button.setPointerCapture(e.pointerId);
+
+      const onPointerMove = (moveEvent) => {
+        const dx = moveEvent.clientX - startX;
+        const dy = moveEvent.clientY - startY;
+
+        if (!hasDragged && (Math.abs(dx) > 5 || Math.abs(dy) > 5)) {
+          hasDragged = true;
+          button.setAttribute('data-has-dragged', 'true');
+          button.classList.add('is-dragging');
+        }
+
+        if (hasDragged) {
+          let newLeft = startLeft + dx;
+          let newTop = startTop + dy;
+
+          // Clamp within viewport boundary
+          const minLeft = 0;
+          const maxLeft = window.innerWidth - rect.width;
+          const minTop = 0;
+          const maxTop = window.innerHeight - rect.height;
+
+          newLeft = Math.max(minLeft, Math.min(newLeft, maxLeft));
+          newTop = Math.max(minTop, Math.min(newTop, maxTop));
+
+          // Convert to percentage to keep layout responsive on resize
+          const topPercent = (newTop / window.innerHeight) * 100;
+          const leftPercent = (newLeft / window.innerWidth) * 100;
+
+          button.style.top = topPercent + '%';
+          button.style.left = leftPercent + '%';
+          button.style.right = 'auto';
+          button.style.bottom = 'auto';
+        }
+      };
+
+      const onPointerUp = (upEvent) => {
+        button.releasePointerCapture(upEvent.pointerId);
+        button.removeEventListener('pointermove', onPointerMove);
+        button.removeEventListener('pointerup', onPointerUp);
+        button.removeEventListener('pointercancel', onPointerUp);
+
+        if (hasDragged) {
+          button.classList.remove('is-dragging');
+          // Persist position
+          if (storage) {
+            storage.set({
+              summaryButtonPosition: {
+                top: button.style.top,
+                left: button.style.left
+              }
+            });
+          }
+          // Prevent the click event from opening overlay
+          setTimeout(() => {
+            button.removeAttribute('data-has-dragged');
+          }, 50);
+        }
+      };
+
+      button.addEventListener('pointermove', onPointerMove);
+      button.addEventListener('pointerup', onPointerUp);
+      button.addEventListener('pointercancel', onPointerUp);
+    });
+
+    button.addEventListener('click', (e) => {
+      if (button.getAttribute('data-has-dragged') === 'true') {
+        e.preventDefault();
+        e.stopPropagation();
+        return;
+      }
       showOverlay().catch((error) => {
         console.error('YouTube summary overlay failed:', error);
         setActionButton('Error', 'is-error');
       });
     });
+
     document.documentElement.appendChild(button);
     return button;
   }

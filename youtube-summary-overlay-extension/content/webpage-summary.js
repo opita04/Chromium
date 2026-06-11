@@ -5,7 +5,9 @@
   window.__opitaWebpageSummaryLoaded = true;
 
   const DEFAULT_MODEL = 'mistralai/mistral-small-24b-instruct-2501';
-  const SUMMARY_RESPONSE_TIMEOUT_MS = 35000;
+  const PREVIOUS_DEFAULT_MODELS = new Set(['nvidia/nemotron-3-ultra-550b-a55b:free']);
+  const SUMMARY_RESPONSE_TIMEOUT_MS = 50000;
+  const WEBPAGE_EXTRACT_ATTEMPTS = 20;
   const OVERLAY_ID = 'opita-webpage-summary-overlay';
   const BUTTON_ID = 'opita-webpage-summary-button';
   const CATEGORIES = ['Political', 'Coding', 'Educational', 'General', 'Business', 'AI', 'Finance', 'Health', 'Science', 'Others'];
@@ -14,7 +16,7 @@
     ['Qwen', 'qwen/qwen3.6-flash', 'assets/model-icons/qwen-color.png'],
     ['Gemini', 'google/gemini-2.5-flash-lite', 'assets/model-icons/gemini-color.svg'],
     ['Mistral', 'mistralai/mistral-small-24b-instruct-2501', 'assets/model-icons/mistral-color.svg'],
-    ['Nemotron', 'nvidia/nemotron-3-ultra-550b-a55b:free', null],
+    ['Free Route', 'openrouter/free', null],
     ['GPT-5', 'openai/gpt-5-nano', 'assets/model-icons/icons8-chatgpt.svg'],
   ];
   const AI_PLATFORMS = [
@@ -24,6 +26,18 @@
     ['mistral', 'Mistral'],
     ['grok', 'Grok'],
     ['deepseek', 'DeepSeek'],
+  ];
+  const ARTICLE_BODY_SELECTORS = [
+    '#article-body',
+    '.article-body',
+    '[itemprop="articleBody"]',
+    '[data-testid*="article-body" i]',
+    '[class*="article-body" i]',
+    '[class*="article__body" i]',
+    '[class*="article-content" i]',
+    '[class*="post-content" i]',
+    '[class*="entry-content" i]',
+    '[class*="story-content" i]',
   ];
 
   let state = {
@@ -36,6 +50,10 @@
   };
 
   const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+  function effectiveModel(model) {
+    return model && !PREVIOUS_DEFAULT_MODELS.has(model) ? model : DEFAULT_MODEL;
+  }
 
   function storageLocal() {
     return globalThis.chrome?.storage?.local || null;
@@ -139,16 +157,19 @@
       'footer',
       'aside',
       'dialog',
+      '[data-nosnippet]',
       '[role="navigation"]',
       '[role="banner"]',
       '[role="contentinfo"]',
       '[aria-modal="true"]',
+      '[class*="article-card" i]',
       '[class*="ad-" i]',
       '[class*="ads" i]',
       '[class*="advert" i]',
       '[class*="breadcrumb" i]',
       '[class*="comment" i]',
       '[class*="cookie" i]',
+      '[class*="display-card" i]',
       '[class*="newsletter" i]',
       '[class*="promo" i]',
       '[class*="related" i]',
@@ -174,11 +195,19 @@
   }
 
   function bestContentNode(root) {
+    const articleBodies = Array.from(root.querySelectorAll(ARTICLE_BODY_SELECTORS.join(',')))
+      .filter((node) => cleanText(node.textContent).length > 400);
+    if (articleBodies.length) {
+      return articleBodies
+        .map((node) => [node, scoreContainer(node)])
+        .sort((a, b) => b[1] - a[1])[0]?.[0];
+    }
+
     const preferred = Array.from(root.querySelectorAll([
       'article',
       'main',
       '[role="main"]',
-      '[itemprop="articleBody"]',
+      ...ARTICLE_BODY_SELECTORS,
       '[class*="article" i]',
       '[class*="content" i]',
       '[class*="post" i]',
@@ -205,7 +234,9 @@
   }
 
   function extractFallbackText() {
+    const articleBodyBlocks = ARTICLE_BODY_SELECTORS.map((selector) => `${selector} h1, ${selector} h2, ${selector} h3, ${selector} p, ${selector} li, ${selector} blockquote`).join(', ');
     const selectorGroups = [
+      articleBodyBlocks,
       'article h1, article h2, article h3, article p, article li, article blockquote',
       'main h1, main h2, main h3, main p, main li, main blockquote',
       '[role="main"] h1, [role="main"] h2, [role="main"] h3, [role="main"] p, [role="main"] li, [role="main"] blockquote',
@@ -266,7 +297,7 @@
 
   async function extractWebpageWithRetry() {
     let lastError = null;
-    for (let attempt = 0; attempt < 6; attempt += 1) {
+    for (let attempt = 0; attempt < WEBPAGE_EXTRACT_ATTEMPTS; attempt += 1) {
       try {
         return extractWebpage();
       } catch (error) {
@@ -320,6 +351,12 @@
       #${BUTTON_ID}[disabled] { cursor: wait; opacity: 0.92; }
       #${BUTTON_ID}.is-done { background: linear-gradient(145deg, #047857, #22c55e); box-shadow: 0 10px 26px rgba(2,6,23,0.34), 0 0 0 5px rgba(34,197,94,0.16); }
       #${BUTTON_ID}.is-error { background: linear-gradient(145deg, #b91c1c, #f97316); box-shadow: 0 10px 26px rgba(2,6,23,0.34), 0 0 0 5px rgba(249,115,22,0.17); }
+      #${BUTTON_ID}.is-dragging {
+        cursor: grabbing !important;
+        transform: scale(1.08) !important;
+        box-shadow: 0 15px 35px rgba(2,6,23,0.5), 0 0 0 6px rgba(245,158,11,0.25) !important;
+        transition: none !important;
+      }
     `;
     document.documentElement.appendChild(style);
   }
@@ -352,12 +389,109 @@
     button.textContent = 'S';
     button.title = 'Summarize page';
     button.setAttribute('aria-label', 'Summarize page');
-    button.addEventListener('click', () => {
+
+    // Restore saved position
+    const storage = storageLocal();
+    if (storage) {
+      storage.get('summaryButtonPosition', (data) => {
+        const pos = data.summaryButtonPosition;
+        if (pos && typeof pos.top === 'string' && typeof pos.left === 'string') {
+          button.style.top = pos.top;
+          button.style.left = pos.left;
+          button.style.right = 'auto';
+          button.style.bottom = 'auto';
+        }
+      });
+    }
+
+    // Add unified pointer drag support
+    button.addEventListener('pointerdown', (e) => {
+      if (e.button !== 0) return; // Only left click
+
+      const rect = button.getBoundingClientRect();
+      const startX = e.clientX;
+      const startY = e.clientY;
+      const startLeft = rect.left;
+      const startTop = rect.top;
+
+      let hasDragged = false;
+      button.setPointerCapture(e.pointerId);
+
+      const onPointerMove = (moveEvent) => {
+        const dx = moveEvent.clientX - startX;
+        const dy = moveEvent.clientY - startY;
+
+        if (!hasDragged && (Math.abs(dx) > 5 || Math.abs(dy) > 5)) {
+          hasDragged = true;
+          button.setAttribute('data-has-dragged', 'true');
+          button.classList.add('is-dragging');
+        }
+
+        if (hasDragged) {
+          let newLeft = startLeft + dx;
+          let newTop = startTop + dy;
+
+          // Clamp within viewport boundary
+          const minLeft = 0;
+          const maxLeft = window.innerWidth - rect.width;
+          const minTop = 0;
+          const maxTop = window.innerHeight - rect.height;
+
+          newLeft = Math.max(minLeft, Math.min(newLeft, maxLeft));
+          newTop = Math.max(minTop, Math.min(newTop, maxTop));
+
+          // Convert to percentage to keep layout responsive on resize
+          const topPercent = (newTop / window.innerHeight) * 100;
+          const leftPercent = (newLeft / window.innerWidth) * 100;
+
+          button.style.top = topPercent + '%';
+          button.style.left = leftPercent + '%';
+          button.style.right = 'auto';
+          button.style.bottom = 'auto';
+        }
+      };
+
+      const onPointerUp = (upEvent) => {
+        button.releasePointerCapture(upEvent.pointerId);
+        button.removeEventListener('pointermove', onPointerMove);
+        button.removeEventListener('pointerup', onPointerUp);
+        button.removeEventListener('pointercancel', onPointerUp);
+
+        if (hasDragged) {
+          button.classList.remove('is-dragging');
+          // Persist position
+          if (storage) {
+            storage.set({
+              summaryButtonPosition: {
+                top: button.style.top,
+                left: button.style.left
+              }
+            });
+          }
+          // Prevent the click event from opening overlay
+          setTimeout(() => {
+            button.removeAttribute('data-has-dragged');
+          }, 50);
+        }
+      };
+
+      button.addEventListener('pointermove', onPointerMove);
+      button.addEventListener('pointerup', onPointerUp);
+      button.addEventListener('pointercancel', onPointerUp);
+    });
+
+    button.addEventListener('click', (e) => {
+      if (button.getAttribute('data-has-dragged') === 'true') {
+        e.preventDefault();
+        e.stopPropagation();
+        return;
+      }
       showOverlay().catch((error) => {
         console.error('Webpage summary failed:', error);
         setActionButton('Error', 'is-error');
       });
     });
+
     document.documentElement.appendChild(button);
     return button;
   }
@@ -664,7 +798,7 @@
     const path = overlayPart('path');
     if (title) title.textContent = state.source?.title || 'Webpage summary';
     if (meta) meta.textContent = state.source ? `${state.source.author || state.source.siteName || location.hostname} - ${state.source.url}` : '';
-    const selectedModel = state.model || DEFAULT_MODEL;
+    const selectedModel = effectiveModel(state.model);
     if (model) model.value = selectedModel;
     document.getElementById(OVERLAY_ID)?.querySelectorAll('[data-model-preset]').forEach((button) => {
       button.dataset.active = button.dataset.modelPreset === selectedModel ? 'true' : 'false';
@@ -673,7 +807,7 @@
     if (summary) renderMarkdown(state.markdown || '', summary);
     if (path) path.textContent = state.path ? `Saved: ${state.path}` : '';
     if (state.markdown) {
-      setStatus(fromCache ? 'Loaded cached summary. It did not rerun.' : `Done. Category: ${state.category}`);
+      setStatus(fromCache ? `Loaded cached summary. Redo summary uses ${effectiveModel(state.model)}.` : `Done. Category: ${state.category}`);
       setActionButton('Open Summary', 'is-done');
     }
   }
@@ -711,11 +845,21 @@
       const extracted = await extractWebpageWithRetry();
       state.source = extracted.video;
       renderState(false);
-      const selectedModel = model || overlayPart('model')?.value.trim() || DEFAULT_MODEL;
+      const selectedModel = effectiveModel(model || overlayPart('model')?.value.trim());
       state.model = selectedModel;
       setProgress(35, `Page text ready. Sending to ${selectedModel}...`);
       setBusy(true, `Sending page text to ${selectedModel}...`);
-      const result = await sendMessage({ type: 'SUMMARIZE_AND_SAVE', video: state.source, model: selectedModel }, SUMMARY_RESPONSE_TIMEOUT_MS);
+      const waitTimers = [
+        setTimeout(() => setProgress(50, `Still waiting on ${selectedModel}...`), 5000),
+        setTimeout(() => setProgress(65, selectedModel === DEFAULT_MODEL ? 'Mistral is still thinking...' : `Still waiting on ${selectedModel}...`), 8500),
+        setTimeout(() => setProgress(78, 'Finishing summary request...'), 12000),
+      ];
+      let result;
+      try {
+        result = await sendMessage({ type: 'SUMMARIZE_AND_SAVE', video: state.source, model: selectedModel }, SUMMARY_RESPONSE_TIMEOUT_MS);
+      } finally {
+        waitTimers.forEach((timer) => clearTimeout(timer));
+      }
       if (!result.ok) throw new Error(result.error || 'Summarize failed.');
       setProgress(90, 'Saving Markdown note...');
       state = {

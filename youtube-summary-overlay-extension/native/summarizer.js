@@ -5,7 +5,9 @@ const { execFileSync } = require('node:child_process');
 
 const DEFAULT_MODEL = 'mistralai/mistral-small-24b-instruct-2501';
 const FALLBACK_MODEL = 'mistralai/mistral-small-24b-instruct-2501';
-const FALLBACK_SOURCE_MODELS = new Set(['nvidia/nemotron-3-ultra-550b-a55b:free']);
+const CONTEXT_LENGTH_FALLBACK_MODEL = 'google/gemini-2.5-flash-lite';
+const PREVIOUS_DEFAULT_MODELS = new Set(['nvidia/nemotron-3-ultra-550b-a55b:free']);
+const FALLBACK_SOURCE_MODELS = new Set(['openrouter/free', 'nvidia/nemotron-3-ultra-550b-a55b:free']);
 const OPENROUTER_TIMEOUT_MS = Number.parseInt(process.env.OPENROUTER_TIMEOUT_MS || '8000', 10);
 const DEFAULT_OUTPUT_DIR = '/Users/opita/Documents/Obsidian/youtube-summaries';
 const CATEGORIES = [
@@ -61,6 +63,10 @@ function getOpenRouterApiKey() {
 function logNative(message, details = {}) {
   const suffix = Object.keys(details).length ? ` ${JSON.stringify(details)}` : '';
   console.error(`[youtube-summary] ${new Date().toISOString()} ${message}${suffix}`);
+}
+
+function effectiveModel(model) {
+  return model && !PREVIOUS_DEFAULT_MODELS.has(model) ? model : DEFAULT_MODEL;
 }
 
 function sanitizeFilePart(value, fallback = 'untitled') {
@@ -247,28 +253,33 @@ async function requestOpenRouter({ video, model }) {
   const timeout = setTimeout(() => controller.abort(), Number.isFinite(OPENROUTER_TIMEOUT_MS) ? OPENROUTER_TIMEOUT_MS : 45000);
   const startedAt = Date.now();
   logNative('openrouter request start', { model, timeoutMs: OPENROUTER_TIMEOUT_MS });
-  const response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
-    method: 'POST',
-    signal: controller.signal,
-    headers: {
-      Authorization: `Bearer ${apiKey}`,
-      'Content-Type': 'application/json',
-      'HTTP-Referer': source.url || 'https://www.youtube.com/',
-      'X-Title': source.sourceType === 'webpage' ? 'Webpage Summary Overlay' : 'YouTube Summary Overlay',
-    },
-    body: JSON.stringify({
-      model,
-      messages: [
-        { role: 'system', content: systemPromptFor(source) },
-        { role: 'user', content: buildPrompt(source) },
-      ],
-      temperature: 0.2,
-      max_tokens: 2600,
-    }),
-  }).finally(() => clearTimeout(timeout));
-  logNative('openrouter response received', { model, status: response.status, ms: Date.now() - startedAt });
-
-  const data = await response.json().catch(() => ({}));
+  let response;
+  let data;
+  try {
+    response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
+      method: 'POST',
+      signal: controller.signal,
+      headers: {
+        Authorization: `Bearer ${apiKey}`,
+        'Content-Type': 'application/json',
+        'HTTP-Referer': source.url || 'https://www.youtube.com/',
+        'X-Title': source.sourceType === 'webpage' ? 'Webpage Summary Overlay' : 'YouTube Summary Overlay',
+      },
+      body: JSON.stringify({
+        model,
+        messages: [
+          { role: 'system', content: systemPromptFor(source) },
+          { role: 'user', content: buildPrompt(source) },
+        ],
+        temperature: 0.2,
+        max_tokens: 2600,
+      }),
+    });
+    logNative('openrouter response received', { model, status: response.status, ms: Date.now() - startedAt });
+    data = await response.json().catch(() => ({}));
+  } finally {
+    clearTimeout(timeout);
+  }
   if (!response.ok) {
     const message = data?.error?.metadata?.raw || data?.error?.message || data?.message || response.statusText;
     throw new Error(`OpenRouter ${response.status}: ${message}`);
@@ -279,16 +290,25 @@ async function requestOpenRouter({ video, model }) {
   return { markdown, model, usage: data.usage || null };
 }
 
+function isContextLengthError(error) {
+  return /maximum context length|context length|requested about \d+ tokens/i.test(String(error?.message || ''));
+}
+
 async function callOpenRouter({ video, model = DEFAULT_MODEL }) {
+  const selectedModel = effectiveModel(model);
   try {
-    return await requestOpenRouter({ video, model });
+    return await requestOpenRouter({ video, model: selectedModel });
   } catch (error) {
-    if (FALLBACK_SOURCE_MODELS.has(model) && error?.name === 'AbortError') {
-      logNative('openrouter model timed out, falling back', { model, fallbackModel: FALLBACK_MODEL, timeoutMs: OPENROUTER_TIMEOUT_MS });
+    if (selectedModel !== CONTEXT_LENGTH_FALLBACK_MODEL && isContextLengthError(error)) {
+      logNative('openrouter context too long, falling back', { model: selectedModel, fallbackModel: CONTEXT_LENGTH_FALLBACK_MODEL });
+      return requestOpenRouter({ video, model: CONTEXT_LENGTH_FALLBACK_MODEL });
+    }
+    if (FALLBACK_SOURCE_MODELS.has(selectedModel) && error?.name === 'AbortError') {
+      logNative('openrouter model timed out, falling back', { model: selectedModel, fallbackModel: FALLBACK_MODEL, timeoutMs: OPENROUTER_TIMEOUT_MS });
       return requestOpenRouter({ video, model: FALLBACK_MODEL });
     }
     if (error?.name === 'AbortError') {
-      throw new Error(`OpenRouter timed out after ${OPENROUTER_TIMEOUT_MS}ms for ${model}.`);
+      throw new Error(`OpenRouter timed out after ${OPENROUTER_TIMEOUT_MS}ms for ${selectedModel}.`);
     }
     throw error;
   }
@@ -325,6 +345,13 @@ function ensureSourceTextSection(markdown, video) {
   if (source.sourceType === 'youtube' && /^## Transcript\s*$/im.test(text)) return text;
   if (source.sourceType === 'webpage' && /^## Source Text\s*$/im.test(text)) return text;
   return `${text.replace(/\s*$/, '')}${buildSourceTextSection(source)}`;
+}
+
+function stripSourceTextSection(markdown, video) {
+  const source = normalizeSource(video);
+  const heading = source.sourceType === 'youtube' ? 'Transcript' : 'Source Text';
+  const pattern = new RegExp(`\\n\\n## ${escapeRegExp(heading)}\\n\\n[\\s\\S]*$`);
+  return String(markdown || '').replace(pattern, '').trim();
 }
 
 function outputPathFor(video, outputDir = DEFAULT_OUTPUT_DIR, category = 'General') {
@@ -372,21 +399,22 @@ function saveMarkdown({ video, markdown, outputDir = DEFAULT_OUTPUT_DIR, categor
     fs.unlinkSync(previousPath);
   }
 
-  return { ok: true, path: targetPath, category: safeCategory, markdown: markdownWithCategory };
+  return { ok: true, path: targetPath, category: safeCategory, markdown: stripSourceTextSection(markdownWithCategory, video) };
 }
 
 async function summarizeAndSave({ video, model = DEFAULT_MODEL, outputDir = DEFAULT_OUTPUT_DIR }) {
   const source = normalizeSource(video);
   if (!source.text) throw new Error(source.sourceType === 'webpage' ? 'No webpage text provided.' : 'No transcript provided.');
-  const result = await callOpenRouter({ video: source, model });
+  const result = await callOpenRouter({ video: source, model: effectiveModel(model) });
   const category = classifyCategory(source, result.markdown);
   const markdown = buildMarkdown({ video: source, summaryMarkdown: result.markdown, model: result.model, usage: result.usage, category });
   const saved = saveMarkdown({ video: source, markdown, outputDir, category });
-  return { ok: true, markdown, path: saved.path, category: saved.category, model: result.model, usage: result.usage };
+  return { ok: true, markdown: stripSourceTextSection(markdown, source), path: saved.path, category: saved.category, model: result.model, usage: result.usage };
 }
 
 module.exports = {
   CATEGORIES,
+  CONTEXT_LENGTH_FALLBACK_MODEL,
   DEFAULT_MODEL,
   FALLBACK_MODEL,
   DEFAULT_OUTPUT_DIR,
@@ -398,6 +426,7 @@ module.exports = {
   normalizeSource,
   outputPathFor,
   saveMarkdown,
+  stripSourceTextSection,
   summarizeAndSave,
   systemPromptFor,
   updateMarkdownCategory,
