@@ -94,8 +94,15 @@ security add-generic-password -a "$USER" -s openrouter -w 'YOUR_OPENROUTER_KEY' 
 Then reload the extension/native host.
 
 Safari/browser-direct fallback does not use the native host. If native messaging
-is unavailable, set a private extension-storage key named `openRouterApiKey` or
-`OPENROUTER_API_KEY`; do not paste provider keys into checked-in JavaScript.
+is unavailable, either set a private extension-storage key named
+`openRouterApiKey` / `OPENROUTER_API_KEY`, or create an ignored local file at
+`background/local-secrets.js` containing:
+
+```js
+self.OPENROUTER_API_KEY = 'YOUR_OPENROUTER_KEY';
+```
+
+Do not paste provider keys into checked-in JavaScript.
 
 ## Test
 

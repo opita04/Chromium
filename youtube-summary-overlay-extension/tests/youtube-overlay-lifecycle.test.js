@@ -226,7 +226,7 @@ function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-function createSandbox({ cached = null, existingSummary = null, summaryResult = null, storageGetStalls = false, storageSetRejects = false } = {}) {
+function createSandbox({ cached = null, existingSummary = null, summaryResult = null, runtimePromiseMode = false, storageGetStalls = false, storageSetRejects = false } = {}) {
   const document = new FakeDocument();
   const playerResponse = {
     videoDetails: { author: 'Lifecycle Channel' },
@@ -286,6 +286,19 @@ function createSandbox({ cached = null, existingSummary = null, summaryResult = 
         },
         sendMessage(message, callback) {
           runtimeMessages.push(message);
+          const responsePromise = (() => {
+            if (message.type === 'FIND_EXISTING_SUMMARY') {
+              return Promise.resolve(existingSummary || { ok: true, found: false, saveMode: 'browser-direct' });
+            }
+            if (message.type === 'SUMMARIZE_AND_SAVE') {
+              return summarizeDeferred.promise;
+            }
+            return Promise.resolve({ ok: false, error: `Unexpected message ${message.type}` });
+          })();
+          if (runtimePromiseMode) {
+            if (callback) callback(undefined);
+            return responsePromise;
+          }
           if (message.type === 'FIND_EXISTING_SUMMARY') {
             callback(existingSummary || { ok: true, found: false, saveMode: 'browser-direct' });
             return;
@@ -442,6 +455,19 @@ async function testStalledCacheReadFallsThroughToGeneration() {
   assert.match(overlay.querySelector('[data-role="summary"]').textContent, /Ready Summary/);
 }
 
+async function testPromiseRuntimeMessageResponseCompletesGeneration() {
+  const env = createSandbox({ runtimePromiseMode: true });
+  await openFromToolbar(env);
+  const overlay = env.document.getElementById('opita-youtube-summary-overlay');
+  assert.equal(overlay.hidden, true);
+
+  env.resolveSummary();
+  await tick();
+  await tick();
+  assert.equal(overlay.hidden, false);
+  assert.match(overlay.querySelector('[data-role="summary"]').textContent, /Ready Summary/);
+}
+
 async function testCacheWriteFailureStillShowsReadySummary() {
   const env = createSandbox({ storageSetRejects: true });
   await openFromToolbar(env);
@@ -490,6 +516,7 @@ async function testStaleLaunchDoesNotOpenAfterVideoNavigation() {
   await testCacheHitOpensImmediately();
   await testSavedSummaryHitOpensImmediatelyWithoutGeneration();
   await testStalledCacheReadFallsThroughToGeneration();
+  await testPromiseRuntimeMessageResponseCompletesGeneration();
   await testCacheWriteFailureStillShowsReadySummary();
   await testGenerationErrorShowsExplicitErrorState();
   await testStaleLaunchDoesNotOpenAfterVideoNavigation();

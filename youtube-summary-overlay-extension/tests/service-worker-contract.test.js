@@ -6,7 +6,7 @@ const vm = require('node:vm');
 const root = path.resolve(__dirname, '..');
 const scriptSource = fs.readFileSync(path.join(root, 'background/service-worker.js'), 'utf8');
 
-function createServiceWorker({ nativeHandler, directKey = '', fetchHandler = null, storageCallbackOnly = false }) {
+function createServiceWorker({ nativeHandler, directKey = '', localGlobalKey = '', fetchHandler = null, storageCallbackOnly = false }) {
   let messageListener = null;
   const nativeMessages = [];
   const fetchCalls = [];
@@ -21,6 +21,7 @@ function createServiceWorker({ nativeHandler, directKey = '', fetchHandler = nul
       if (!fetchHandler) throw new Error('fetch should not be called in this contract test');
       return fetchHandler(...args);
     },
+    OPENROUTER_API_KEY: localGlobalKey,
     chrome: {
       action: {
         onClicked: { addListener() {} },
@@ -251,6 +252,38 @@ async function testDirectKeyLookupSupportsCallbackOnlyStorage() {
   assert.equal(result.saveMode, 'browser-direct');
 }
 
+async function testDirectKeyLookupSupportsLocalSecretsGlobal() {
+  const worker = createServiceWorker({
+    localGlobalKey: 'sk-test-local-secret',
+    nativeHandler: async () => {
+      throw new Error('Native host unavailable');
+    },
+    fetchHandler: async (_url, options) => {
+      assert.equal(options.headers.Authorization, 'Bearer sk-test-local-secret');
+      return {
+        ok: true,
+        json: async () => ({
+          choices: [{ message: { content: '# Local Secret Summary' } }],
+        }),
+      };
+    },
+  });
+
+  const result = await worker.send({
+    type: 'SUMMARIZE_AND_SAVE',
+    video: {
+      videoId: 'abc123',
+      title: 'Example',
+      url: 'https://www.youtube.com/watch?v=abc123',
+      transcript: 'Long transcript '.repeat(20),
+    },
+    model: 'mistralai/mistral-small-24b-instruct-2501',
+  });
+  assert.equal(result.ok, true);
+  assert.equal(result.markdown, '# Local Secret Summary');
+  assert.equal(result.saveMode, 'browser-direct');
+}
+
 (async () => {
   await testSummarizePrefersReachableNativeHostEvenWithDirectKey();
   await testSummarizeFallsBackToDirectWhenNativeUnavailable();
@@ -258,6 +291,7 @@ async function testDirectKeyLookupSupportsCallbackOnlyStorage() {
   await testSaveMarkdownPrefersReachableNativeHost();
   await testFindExistingFallsBackWhenNativeUnavailable();
   await testDirectKeyLookupSupportsCallbackOnlyStorage();
+  await testDirectKeyLookupSupportsLocalSecretsGlobal();
   console.log('service-worker-contract.test.js passed');
 })().catch((error) => {
   console.error(error);

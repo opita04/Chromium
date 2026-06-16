@@ -7,6 +7,14 @@ const OPENROUTER_MAX_TOKENS = 2600;
 const STORAGE_OPERATION_TIMEOUT_MS = 1500;
 const OPENROUTER_API_KEY_STORAGE_KEYS = ['openRouterApiKey', 'OPENROUTER_API_KEY'];
 
+try {
+  if (typeof globalThis.importScripts === 'function') {
+    globalThis.importScripts('local-secrets.js');
+  }
+} catch {
+  // Optional local-only key file. Never required and never committed.
+}
+
 const AI_PLATFORMS = [
   { id: 'chatgpt', name: 'ChatGPT', url: 'https://chatgpt.com/?model=gpt-4o-mini&quicktube' },
   { id: 'claude', name: 'Claude', url: 'https://claude.ai/chats' },
@@ -51,6 +59,10 @@ function storageGet(storage, key, timeoutMs = STORAGE_OPERATION_TIMEOUT_MS) {
 }
 
 async function getDirectOpenRouterApiKey() {
+  for (const key of OPENROUTER_API_KEY_STORAGE_KEYS) {
+    const value = String(globalThis[key] || '').trim();
+    if (value.startsWith('sk-')) return value;
+  }
   const storage = globalThis.chrome?.storage?.local;
   if (!storage?.get) return '';
   const data = await storageGet(storage, OPENROUTER_API_KEY_STORAGE_KEYS);

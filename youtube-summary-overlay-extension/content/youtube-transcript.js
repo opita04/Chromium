@@ -609,21 +609,41 @@
   function sendMessage(message, timeoutMs = 0) {
     return new Promise((resolve) => {
       let settled = false;
-      const timeout = timeoutMs > 0 ? setTimeout(() => {
-        settled = true;
-        resolve({ ok: false, error: `No extension response after ${Math.round(timeoutMs / 1000)}s.` });
-      }, timeoutMs) : null;
-
-      chrome.runtime.sendMessage(message, (response) => {
+      let maybePromise;
+      const finish = (response) => {
         if (settled) return;
         settled = true;
         if (timeout) clearTimeout(timeout);
-        if (chrome.runtime.lastError) {
-          resolve({ ok: false, error: chrome.runtime.lastError.message });
-          return;
-        }
         resolve(response || { ok: false, error: 'No response.' });
-      });
+      };
+      const timeout = timeoutMs > 0 ? setTimeout(() => {
+        finish({ ok: false, error: `No extension response after ${Math.round(timeoutMs / 1000)}s.` });
+      }, timeoutMs) : null;
+
+      try {
+        maybePromise = chrome.runtime.sendMessage(message, (response) => {
+          if (settled) return;
+          if (chrome.runtime.lastError) {
+            finish({ ok: false, error: chrome.runtime.lastError.message });
+            return;
+          }
+          if (response !== undefined) {
+            finish(response);
+            return;
+          }
+          setTimeout(() => {
+            if (!settled && !maybePromise?.then) finish({ ok: false, error: 'No response.' });
+          }, 0);
+        });
+        if (maybePromise?.then) {
+          maybePromise.then(
+            (response) => finish(response),
+            (error) => finish({ ok: false, error: error?.message || String(error) })
+          );
+        }
+      } catch (error) {
+        finish({ ok: false, error: error?.message || String(error) });
+      }
     });
   }
 
