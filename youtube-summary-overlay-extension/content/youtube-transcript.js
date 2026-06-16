@@ -638,9 +638,11 @@
             finish(response);
             return;
           }
-          setTimeout(() => {
-            if (!settled) finish({ ok: false, error: 'No response.' });
-          }, 0);
+          if (!timeout) {
+            setTimeout(() => {
+              if (!settled) finish({ ok: false, error: 'No response.' });
+            }, 250);
+          }
         });
       } catch (error) {
         finish({ ok: false, error: error?.message || String(error) });

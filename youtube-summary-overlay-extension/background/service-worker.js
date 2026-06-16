@@ -494,8 +494,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   const responsePromise = handleRuntimeMessage(message, sender)
     .catch((error) => ({ ok: false, error: error?.message || String(error) }));
 
-  if (globalThis.browser?.runtime?.onMessage) return responsePromise;
-
   responsePromise.then(sendResponse);
+  if (globalThis.browser?.runtime?.onMessage) return responsePromise;
   return true;
 });

@@ -101,8 +101,12 @@ function createServiceWorker({ nativeHandler, directKey = '', localGlobalKey = '
       });
     },
     sendAsPromise(message) {
-      return messageListener(message, {}, () => {
-        throw new Error('sendResponse should not be used in browser promise mode');
+      return messageListener(message, {}, () => {});
+    },
+    sendWithCallbackInBrowserMode(message) {
+      return new Promise((resolve) => {
+        const returned = messageListener(message, {}, resolve);
+        assert.equal(typeof returned?.then, 'function');
       });
     },
   };
@@ -315,6 +319,26 @@ async function testBrowserPromiseModeReturnsMessageResponse() {
   assert.equal(result.markdown, '# summarizeAndSave');
 }
 
+async function testBrowserPromiseModeAlsoCallsSendResponse() {
+  const worker = createServiceWorker({
+    browserPromiseMode: true,
+    nativeHandler: async (message) => ({
+      ok: true,
+      markdown: `# ${message.type}`,
+      path: '/tmp/native.md',
+      category: 'General',
+    }),
+  });
+
+  const result = await worker.sendWithCallbackInBrowserMode({
+    type: 'SUMMARIZE_AND_SAVE',
+    video: { videoId: 'abc123', title: 'Example', transcript: 'Long transcript '.repeat(20) },
+    model: 'mistralai/mistral-small-24b-instruct-2501',
+  });
+  assert.equal(result.ok, true);
+  assert.equal(result.markdown, '# summarizeAndSave');
+}
+
 (async () => {
   await testSummarizePrefersReachableNativeHostEvenWithDirectKey();
   await testSummarizeFallsBackToDirectWhenNativeUnavailable();
@@ -324,6 +348,7 @@ async function testBrowserPromiseModeReturnsMessageResponse() {
   await testDirectKeyLookupSupportsCallbackOnlyStorage();
   await testDirectKeyLookupSupportsLocalSecretsGlobal();
   await testBrowserPromiseModeReturnsMessageResponse();
+  await testBrowserPromiseModeAlsoCallsSendResponse();
   console.log('service-worker-contract.test.js passed');
 })().catch((error) => {
   console.error(error);
