@@ -8,8 +8,8 @@ const STORAGE_OPERATION_TIMEOUT_MS = 1500;
 const OPENROUTER_API_KEY_STORAGE_KEYS = ['openRouterApiKey', 'OPENROUTER_API_KEY'];
 
 try {
-  if (typeof globalThis.importScripts === 'function') {
-    globalThis.importScripts('local-secrets.js');
+  if (typeof importScripts === 'function') {
+    importScripts('local-secrets.js');
   }
 } catch {
   // Optional local-only key file. Never required and never committed.
@@ -59,8 +59,11 @@ function storageGet(storage, key, timeoutMs = STORAGE_OPERATION_TIMEOUT_MS) {
 }
 
 async function getDirectOpenRouterApiKey() {
+  if (typeof OPENROUTER_API_KEY === 'string' && OPENROUTER_API_KEY.trim().startsWith('sk-')) {
+    return OPENROUTER_API_KEY.trim();
+  }
   for (const key of OPENROUTER_API_KEY_STORAGE_KEYS) {
-    const value = String(globalThis[key] || '').trim();
+    const value = String(globalThis[key] || globalThis.self?.[key] || '').trim();
     if (value.startsWith('sk-')) return value;
   }
   const storage = globalThis.chrome?.storage?.local;
@@ -453,49 +456,46 @@ chrome.action.onClicked.addListener((tab) => {
   openSummaryInTab(tab).catch(() => {});
 });
 
+async function handleRuntimeMessage(message) {
+  if (message?.type === 'GET_ACTIVE_VIDEO') {
+    const tab = await getActiveYouTubeTab();
+    const response = await chrome.tabs.sendMessage(tab.id, { type: 'EXTRACT_YOUTUBE_TRANSCRIPT' });
+    return { ok: true, tabId: tab.id, ...response };
+  }
+
+  if (message?.type === 'SUMMARIZE_AND_SAVE') {
+    return summarizeBestAvailable({
+      video: message.video,
+      model: effectiveModel(message.model),
+    });
+  }
+
+  if (message?.type === 'FIND_EXISTING_SUMMARY') {
+    return findExistingSummaryBestAvailable({ videoId: message.videoId });
+  }
+
+  if (message?.type === 'SAVE_MARKDOWN') {
+    return saveMarkdownBestAvailable({
+      markdown: message.markdown,
+      video: message.video,
+      category: message.category,
+      previousPath: message.previousPath,
+    });
+  }
+
+  if (message?.type === 'OPEN_AI_PLATFORM') {
+    return openAiPlatform(message.platformId, message.analysisPrompt);
+  }
+
+  return { ok: false, error: 'Unknown message type.' };
+}
+
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
-  (async () => {
-    if (message?.type === 'GET_ACTIVE_VIDEO') {
-      const tab = await getActiveYouTubeTab();
-      const response = await chrome.tabs.sendMessage(tab.id, { type: 'EXTRACT_YOUTUBE_TRANSCRIPT' });
-      sendResponse({ ok: true, tabId: tab.id, ...response });
-      return;
-    }
+  const responsePromise = handleRuntimeMessage(message, sender)
+    .catch((error) => ({ ok: false, error: error?.message || String(error) }));
 
-    if (message?.type === 'SUMMARIZE_AND_SAVE') {
-      const result = await summarizeBestAvailable({
-        video: message.video,
-        model: effectiveModel(message.model),
-      });
-      sendResponse(result);
-      return;
-    }
+  if (globalThis.browser?.runtime?.onMessage) return responsePromise;
 
-    if (message?.type === 'FIND_EXISTING_SUMMARY') {
-      const result = await findExistingSummaryBestAvailable({ videoId: message.videoId });
-      sendResponse(result);
-      return;
-    }
-
-    if (message?.type === 'SAVE_MARKDOWN') {
-      const result = await saveMarkdownBestAvailable({
-        markdown: message.markdown,
-        video: message.video,
-        category: message.category,
-        previousPath: message.previousPath,
-      });
-      sendResponse(result);
-      return;
-    }
-
-    if (message?.type === 'OPEN_AI_PLATFORM') {
-      const result = await openAiPlatform(message.platformId, message.analysisPrompt);
-      sendResponse(result);
-      return;
-    }
-
-    sendResponse({ ok: false, error: 'Unknown message type.' });
-  })().catch((error) => sendResponse({ ok: false, error: error.message }));
-
+  responsePromise.then(sendResponse);
   return true;
 });

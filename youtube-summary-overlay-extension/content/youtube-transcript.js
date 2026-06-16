@@ -609,7 +609,6 @@
   function sendMessage(message, timeoutMs = 0) {
     return new Promise((resolve) => {
       let settled = false;
-      let maybePromise;
       const finish = (response) => {
         if (settled) return;
         settled = true;
@@ -621,7 +620,15 @@
       }, timeoutMs) : null;
 
       try {
-        maybePromise = chrome.runtime.sendMessage(message, (response) => {
+        if (globalThis.browser?.runtime?.sendMessage) {
+          globalThis.browser.runtime.sendMessage(message).then(
+            (response) => finish(response),
+            (error) => finish({ ok: false, error: error?.message || String(error) })
+          );
+          return;
+        }
+
+        chrome.runtime.sendMessage(message, (response) => {
           if (settled) return;
           if (chrome.runtime.lastError) {
             finish({ ok: false, error: chrome.runtime.lastError.message });
@@ -632,15 +639,9 @@
             return;
           }
           setTimeout(() => {
-            if (!settled && !maybePromise?.then) finish({ ok: false, error: 'No response.' });
+            if (!settled) finish({ ok: false, error: 'No response.' });
           }, 0);
         });
-        if (maybePromise?.then) {
-          maybePromise.then(
-            (response) => finish(response),
-            (error) => finish({ ok: false, error: error?.message || String(error) })
-          );
-        }
       } catch (error) {
         finish({ ok: false, error: error?.message || String(error) });
       }

@@ -254,6 +254,33 @@ function createSandbox({ cached = null, existingSummary = null, summaryResult = 
   const storageData = {};
   if (cached) storageData['youtubeSummaryOverlay:abc123'] = cached;
 
+  const runtimeSendMessage = (message, callback) => {
+    runtimeMessages.push(message);
+    const responsePromise = (() => {
+      if (message.type === 'FIND_EXISTING_SUMMARY') {
+        return Promise.resolve(existingSummary || { ok: true, found: false, saveMode: 'browser-direct' });
+      }
+      if (message.type === 'SUMMARIZE_AND_SAVE') {
+        return summarizeDeferred.promise;
+      }
+      return Promise.resolve({ ok: false, error: `Unexpected message ${message.type}` });
+    })();
+    if (runtimePromiseMode) {
+      assert.equal(callback, undefined, 'promise-mode runtime should be called without a callback');
+      return responsePromise;
+    }
+    if (message.type === 'FIND_EXISTING_SUMMARY') {
+      callback(existingSummary || { ok: true, found: false, saveMode: 'browser-direct' });
+      return undefined;
+    }
+    if (message.type === 'SUMMARIZE_AND_SAVE') {
+      summarizeDeferred.promise.then((result) => callback(result));
+      return undefined;
+    }
+    callback({ ok: false, error: `Unexpected message ${message.type}` });
+    return undefined;
+  };
+
   const sandbox = {
     URL,
     console,
@@ -275,6 +302,11 @@ function createSandbox({ cached = null, existingSummary = null, summaryResult = 
         ],
       }),
     }),
+    browser: runtimePromiseMode ? {
+      runtime: {
+        sendMessage: runtimeSendMessage,
+      },
+    } : undefined,
     chrome: {
       runtime: {
         getURL: (assetPath) => `chrome-extension://test/${assetPath}`,
@@ -284,31 +316,7 @@ function createSandbox({ cached = null, existingSummary = null, summaryResult = 
             messageListener = listener;
           },
         },
-        sendMessage(message, callback) {
-          runtimeMessages.push(message);
-          const responsePromise = (() => {
-            if (message.type === 'FIND_EXISTING_SUMMARY') {
-              return Promise.resolve(existingSummary || { ok: true, found: false, saveMode: 'browser-direct' });
-            }
-            if (message.type === 'SUMMARIZE_AND_SAVE') {
-              return summarizeDeferred.promise;
-            }
-            return Promise.resolve({ ok: false, error: `Unexpected message ${message.type}` });
-          })();
-          if (runtimePromiseMode) {
-            if (callback) callback(undefined);
-            return responsePromise;
-          }
-          if (message.type === 'FIND_EXISTING_SUMMARY') {
-            callback(existingSummary || { ok: true, found: false, saveMode: 'browser-direct' });
-            return;
-          }
-          if (message.type === 'SUMMARIZE_AND_SAVE') {
-            summarizeDeferred.promise.then((result) => callback(result));
-            return;
-          }
-          callback({ ok: false, error: `Unexpected message ${message.type}` });
-        },
+        sendMessage: runtimeSendMessage,
       },
       storage: {
         local: {

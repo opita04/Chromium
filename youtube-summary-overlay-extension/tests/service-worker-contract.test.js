@@ -6,7 +6,7 @@ const vm = require('node:vm');
 const root = path.resolve(__dirname, '..');
 const scriptSource = fs.readFileSync(path.join(root, 'background/service-worker.js'), 'utf8');
 
-function createServiceWorker({ nativeHandler, directKey = '', localGlobalKey = '', fetchHandler = null, storageCallbackOnly = false }) {
+function createServiceWorker({ nativeHandler, directKey = '', localGlobalKey = '', fetchHandler = null, storageCallbackOnly = false, browserPromiseMode = false }) {
   let messageListener = null;
   const nativeMessages = [];
   const fetchCalls = [];
@@ -21,7 +21,11 @@ function createServiceWorker({ nativeHandler, directKey = '', localGlobalKey = '
       if (!fetchHandler) throw new Error('fetch should not be called in this contract test');
       return fetchHandler(...args);
     },
-    OPENROUTER_API_KEY: localGlobalKey,
+    importScripts(scriptPath) {
+      assert.equal(scriptPath, 'local-secrets.js');
+      if (localGlobalKey) sandbox.self.OPENROUTER_API_KEY = localGlobalKey;
+    },
+    browser: browserPromiseMode ? { runtime: { onMessage: {} } } : undefined,
     chrome: {
       action: {
         onClicked: { addListener() {} },
@@ -81,6 +85,8 @@ function createServiceWorker({ nativeHandler, directKey = '', localGlobalKey = '
       },
     },
   };
+  sandbox.self = sandbox;
+  sandbox.globalThis = sandbox;
 
   vm.runInNewContext(scriptSource, sandbox, {
     filename: path.join(root, 'background/service-worker.js'),
@@ -92,6 +98,11 @@ function createServiceWorker({ nativeHandler, directKey = '', localGlobalKey = '
     send(message) {
       return new Promise((resolve) => {
         messageListener(message, {}, resolve);
+      });
+    },
+    sendAsPromise(message) {
+      return messageListener(message, {}, () => {
+        throw new Error('sendResponse should not be used in browser promise mode');
       });
     },
   };
@@ -284,6 +295,26 @@ async function testDirectKeyLookupSupportsLocalSecretsGlobal() {
   assert.equal(result.saveMode, 'browser-direct');
 }
 
+async function testBrowserPromiseModeReturnsMessageResponse() {
+  const worker = createServiceWorker({
+    browserPromiseMode: true,
+    nativeHandler: async (message) => ({
+      ok: true,
+      markdown: `# ${message.type}`,
+      path: '/tmp/native.md',
+      category: 'General',
+    }),
+  });
+
+  const result = await worker.sendAsPromise({
+    type: 'SUMMARIZE_AND_SAVE',
+    video: { videoId: 'abc123', title: 'Example', transcript: 'Long transcript '.repeat(20) },
+    model: 'mistralai/mistral-small-24b-instruct-2501',
+  });
+  assert.equal(result.ok, true);
+  assert.equal(result.markdown, '# summarizeAndSave');
+}
+
 (async () => {
   await testSummarizePrefersReachableNativeHostEvenWithDirectKey();
   await testSummarizeFallsBackToDirectWhenNativeUnavailable();
@@ -292,6 +323,7 @@ async function testDirectKeyLookupSupportsLocalSecretsGlobal() {
   await testFindExistingFallsBackWhenNativeUnavailable();
   await testDirectKeyLookupSupportsCallbackOnlyStorage();
   await testDirectKeyLookupSupportsLocalSecretsGlobal();
+  await testBrowserPromiseModeReturnsMessageResponse();
   console.log('service-worker-contract.test.js passed');
 })().catch((error) => {
   console.error(error);
