@@ -222,7 +222,11 @@ function tick() {
   return new Promise((resolve) => setTimeout(resolve, 0));
 }
 
-function createSandbox({ cached = null, existingSummary = null, summaryResult = null, storageSetRejects = false } = {}) {
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function createSandbox({ cached = null, existingSummary = null, summaryResult = null, storageGetStalls = false, storageSetRejects = false } = {}) {
   const document = new FakeDocument();
   const playerResponse = {
     videoDetails: { author: 'Lifecycle Channel' },
@@ -296,6 +300,9 @@ function createSandbox({ cached = null, existingSummary = null, summaryResult = 
       storage: {
         local: {
           get(key, callback) {
+            if (storageGetStalls && String(key).startsWith('youtubeSummaryOverlay:')) {
+              return new Promise(() => {});
+            }
             const result = typeof key === 'string' ? { [key]: storageData[key] } : {};
             if (callback) callback(result);
             return Promise.resolve(result);
@@ -417,6 +424,24 @@ async function testSavedSummaryHitOpensImmediatelyWithoutGeneration() {
   assert.deepEqual(messageTypes(env), ['FIND_EXISTING_SUMMARY']);
 }
 
+async function testStalledCacheReadFallsThroughToGeneration() {
+  const env = createSandbox({ storageGetStalls: true });
+  await openFromToolbar(env);
+  const overlay = env.document.getElementById('opita-youtube-summary-overlay');
+  assert.equal(overlay.hidden, true);
+
+  await sleep(1600);
+  await tick();
+  assert.deepEqual(messageTypes(env), ['FIND_EXISTING_SUMMARY', 'SUMMARIZE_AND_SAVE']);
+  assert.equal(overlay.hidden, true, 'overlay remains hidden while generation is pending');
+
+  env.resolveSummary();
+  await tick();
+  await tick();
+  assert.equal(overlay.hidden, false);
+  assert.match(overlay.querySelector('[data-role="summary"]').textContent, /Ready Summary/);
+}
+
 async function testCacheWriteFailureStillShowsReadySummary() {
   const env = createSandbox({ storageSetRejects: true });
   await openFromToolbar(env);
@@ -464,6 +489,7 @@ async function testStaleLaunchDoesNotOpenAfterVideoNavigation() {
   await testPageButtonFullMissStaysHiddenUntilSummaryReady();
   await testCacheHitOpensImmediately();
   await testSavedSummaryHitOpensImmediatelyWithoutGeneration();
+  await testStalledCacheReadFallsThroughToGeneration();
   await testCacheWriteFailureStillShowsReadySummary();
   await testGenerationErrorShowsExplicitErrorState();
   await testStaleLaunchDoesNotOpenAfterVideoNavigation();

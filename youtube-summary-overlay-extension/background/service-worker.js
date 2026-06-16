@@ -4,6 +4,7 @@ const PREVIOUS_DEFAULT_MODELS = new Set(['nvidia/nemotron-3-ultra-550b-a55b:free
 const NATIVE_MESSAGE_TIMEOUT_MS = 45000;
 const OPENROUTER_TIMEOUT_MS = 45000;
 const OPENROUTER_MAX_TOKENS = 2600;
+const STORAGE_OPERATION_TIMEOUT_MS = 1500;
 const OPENROUTER_API_KEY_STORAGE_KEYS = ['openRouterApiKey', 'OPENROUTER_API_KEY'];
 
 const AI_PLATFORMS = [
@@ -21,10 +22,38 @@ function effectiveModel(model) {
   return model && !PREVIOUS_DEFAULT_MODELS.has(model) ? model : DEFAULT_MODEL;
 }
 
+function storageGet(storage, key, timeoutMs = STORAGE_OPERATION_TIMEOUT_MS) {
+  return new Promise((resolve, reject) => {
+    if (!storage?.get) {
+      resolve({});
+      return;
+    }
+    let settled = false;
+    const finish = (fn, value) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      fn(value);
+    };
+    const timer = setTimeout(() => finish(reject, new Error('storage.get timed out')), timeoutMs);
+    try {
+      const maybePromise = storage.get(key, (data) => finish(resolve, data || {}));
+      if (maybePromise?.then) {
+        maybePromise.then(
+          (data) => finish(resolve, data || {}),
+          (error) => finish(reject, error)
+        );
+      }
+    } catch (error) {
+      finish(reject, error);
+    }
+  });
+}
+
 async function getDirectOpenRouterApiKey() {
   const storage = globalThis.chrome?.storage?.local;
   if (!storage?.get) return '';
-  const data = await storage.get(OPENROUTER_API_KEY_STORAGE_KEYS);
+  const data = await storageGet(storage, OPENROUTER_API_KEY_STORAGE_KEYS);
   for (const key of OPENROUTER_API_KEY_STORAGE_KEYS) {
     const value = String(data?.[key] || '').trim();
     if (value.startsWith('sk-')) return value;

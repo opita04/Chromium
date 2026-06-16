@@ -5,6 +5,7 @@
   const PREVIOUS_DEFAULT_MODELS = new Set(['nvidia/nemotron-3-ultra-550b-a55b:free']);
   const SUMMARY_RESPONSE_TIMEOUT_MS = 50000;
   const EXISTING_SUMMARY_LOOKUP_TIMEOUT_MS = 8000;
+  const STORAGE_OPERATION_TIMEOUT_MS = 1500;
   const CATEGORIES = ['Political', 'Coding', 'Educational', 'General', 'Business', 'AI', 'Finance', 'Health', 'Science', 'Others'];
   const MODEL_PRESETS = [
     ['DeepSeek', 'deepseek/deepseek-v4-flash', 'assets/model-icons/deepseek-color.svg'],
@@ -476,18 +477,79 @@
     return globalThis.chrome?.storage?.local || null;
   }
 
+  function storageGet(storage, key, timeoutMs = STORAGE_OPERATION_TIMEOUT_MS) {
+    return new Promise((resolve, reject) => {
+      if (!storage?.get) {
+        resolve({});
+        return;
+      }
+      let settled = false;
+      const finish = (fn, value) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        fn(value);
+      };
+      const timer = setTimeout(() => finish(reject, new Error('storage.get timed out')), timeoutMs);
+      try {
+        const maybePromise = storage.get(key, (data) => finish(resolve, data || {}));
+        if (maybePromise?.then) {
+          maybePromise.then(
+            (data) => finish(resolve, data || {}),
+            (error) => finish(reject, error)
+          );
+        }
+      } catch (error) {
+        finish(reject, error);
+      }
+    });
+  }
+
+  function storageSet(storage, data, timeoutMs = STORAGE_OPERATION_TIMEOUT_MS) {
+    return new Promise((resolve, reject) => {
+      if (!storage?.set) {
+        resolve();
+        return;
+      }
+      let settled = false;
+      const finish = (fn, value) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        fn(value);
+      };
+      const timer = setTimeout(() => finish(reject, new Error('storage.set timed out')), timeoutMs);
+      try {
+        const maybePromise = storage.set(data, () => finish(resolve));
+        if (maybePromise?.then) {
+          maybePromise.then(
+            () => finish(resolve),
+            (error) => finish(reject, error)
+          );
+        }
+      } catch (error) {
+        finish(reject, error);
+      }
+    });
+  }
+
   async function readCachedSummary(videoId = currentVideoId()) {
     const storage = storageLocal();
     if (!storage) return null;
-    const data = await storage.get(cacheKey(videoId));
-    return data[cacheKey(videoId)] || null;
+    try {
+      const data = await storageGet(storage, cacheKey(videoId));
+      return data[cacheKey(videoId)] || null;
+    } catch (error) {
+      console.warn('Could not read cached YouTube summary:', error);
+      return null;
+    }
   }
 
   async function writeCachedSummary(result) {
     const storage = storageLocal();
     if (!storage) return;
     const videoId = result?.video?.videoId || currentVideoId();
-    await storage.set({
+    await storageSet(storage, {
       [cacheKey(videoId)]: {
         ...result,
         cachedAt: new Date().toISOString(),

@@ -6,7 +6,7 @@ const vm = require('node:vm');
 const root = path.resolve(__dirname, '..');
 const scriptSource = fs.readFileSync(path.join(root, 'background/service-worker.js'), 'utf8');
 
-function createServiceWorker({ nativeHandler, directKey = '', fetchHandler = null }) {
+function createServiceWorker({ nativeHandler, directKey = '', fetchHandler = null, storageCallbackOnly = false }) {
   let messageListener = null;
   const nativeMessages = [];
   const fetchCalls = [];
@@ -50,13 +50,17 @@ function createServiceWorker({ nativeHandler, directKey = '', fetchHandler = nul
       },
       storage: {
         local: {
-          get(keys) {
+          get(keys, callback) {
             const keyList = Array.isArray(keys) ? keys : [keys];
             const data = {};
             for (const key of keyList) {
               if (directKey && (key === 'openRouterApiKey' || key === 'OPENROUTER_API_KEY')) {
                 data[key] = directKey;
               }
+            }
+            if (storageCallbackOnly) {
+              if (callback) callback(data);
+              return undefined;
             }
             return Promise.resolve(data);
           },
@@ -217,12 +221,43 @@ async function testFindExistingFallsBackWhenNativeUnavailable() {
   assert.equal(result.saveMode, 'browser-direct');
 }
 
+async function testDirectKeyLookupSupportsCallbackOnlyStorage() {
+  const worker = createServiceWorker({
+    directKey: 'sk-test-storage-key',
+    storageCallbackOnly: true,
+    nativeHandler: async () => {
+      throw new Error('Native host unavailable');
+    },
+    fetchHandler: async () => ({
+      ok: true,
+      json: async () => ({
+        choices: [{ message: { content: '# Callback Storage Summary' } }],
+      }),
+    }),
+  });
+
+  const result = await worker.send({
+    type: 'SUMMARIZE_AND_SAVE',
+    video: {
+      videoId: 'abc123',
+      title: 'Example',
+      url: 'https://www.youtube.com/watch?v=abc123',
+      transcript: 'Long transcript '.repeat(20),
+    },
+    model: 'mistralai/mistral-small-24b-instruct-2501',
+  });
+  assert.equal(result.ok, true);
+  assert.equal(result.markdown, '# Callback Storage Summary');
+  assert.equal(result.saveMode, 'browser-direct');
+}
+
 (async () => {
   await testSummarizePrefersReachableNativeHostEvenWithDirectKey();
   await testSummarizeFallsBackToDirectWhenNativeUnavailable();
   await testFindExistingPrefersReachableNativeHost();
   await testSaveMarkdownPrefersReachableNativeHost();
   await testFindExistingFallsBackWhenNativeUnavailable();
+  await testDirectKeyLookupSupportsCallbackOnlyStorage();
   console.log('service-worker-contract.test.js passed');
 })().catch((error) => {
   console.error(error);
