@@ -4,6 +4,7 @@
   const DEFAULT_MODEL = 'mistralai/mistral-small-24b-instruct-2501';
   const PREVIOUS_DEFAULT_MODELS = new Set(['nvidia/nemotron-3-ultra-550b-a55b:free']);
   const SUMMARY_RESPONSE_TIMEOUT_MS = 50000;
+  const EXISTING_SUMMARY_LOOKUP_TIMEOUT_MS = 8000;
   const CATEGORIES = ['Political', 'Coding', 'Educational', 'General', 'Business', 'AI', 'Finance', 'Health', 'Science', 'Others'];
   const MODEL_PRESETS = [
     ['DeepSeek', 'deepseek/deepseek-v4-flash', 'assets/model-icons/deepseek-color.svg'],
@@ -74,6 +75,9 @@
     return model && !PREVIOUS_DEFAULT_MODELS.has(model) ? model : DEFAULT_MODEL;
   }
   let lastObservedVideoId = '';
+  let launchSequence = 0;
+  let activeLaunch = null;
+  let activeLaunchPromise = null;
 
   const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -170,7 +174,155 @@
     return 'YouTube Channel';
   }
 
-  async function openTranscriptPanel() {
+  function parseJsonObjectAt(text, startIndex) {
+    let depth = 0;
+    let inString = false;
+    let escaped = false;
+
+    for (let i = startIndex; i < text.length; i += 1) {
+      const char = text[i];
+      if (inString) {
+        if (escaped) {
+          escaped = false;
+        } else if (char === '\\') {
+          escaped = true;
+        } else if (char === '"') {
+          inString = false;
+        }
+        continue;
+      }
+
+      if (char === '"') {
+        inString = true;
+      } else if (char === '{') {
+        depth += 1;
+      } else if (char === '}') {
+        depth -= 1;
+        if (depth === 0) return JSON.parse(text.slice(startIndex, i + 1));
+      }
+    }
+
+    return null;
+  }
+
+  function parseJsonObjectAfter(text, marker, fromIndex = 0) {
+    const markerIndex = text.indexOf(marker, fromIndex);
+    if (markerIndex < 0) return null;
+    const objectStart = text.indexOf('{', markerIndex + marker.length);
+    if (objectStart < 0) return null;
+    return parseJsonObjectAt(text, objectStart);
+  }
+
+  function readPlayerResponseFromScripts() {
+    const markers = [
+      'ytInitialPlayerResponse =',
+      'ytInitialPlayerResponse=',
+      'window["ytInitialPlayerResponse"] =',
+      "window['ytInitialPlayerResponse'] =",
+    ];
+
+    for (const script of Array.from(document.scripts)) {
+      const text = script.textContent || '';
+      if (!text.includes('ytInitialPlayerResponse')) continue;
+      for (const marker of markers) {
+        try {
+          const response = parseJsonObjectAfter(text, marker);
+          if (response?.captions || response?.videoDetails) return response;
+        } catch (error) {
+          console.warn('Could not parse YouTube player response:', error);
+        }
+      }
+    }
+
+    return null;
+  }
+
+  function captionTrackLabel(track) {
+    const name = track?.name?.simpleText || track?.name?.runs?.map((run) => run.text).join('') || '';
+    return name || track?.languageCode || track?.vssId || 'caption track';
+  }
+
+  function captionTrackScore(track) {
+    const language = String(track?.languageCode || track?.vssId || '').toLowerCase();
+    const label = captionTrackLabel(track).toLowerCase();
+    let score = 0;
+    if (language === 'en' || language.startsWith('en-') || label.includes('english')) score += 100;
+    if (track?.kind !== 'asr') score += 25;
+    if (track?.isDefault) score += 5;
+    return score;
+  }
+
+  function sortedCaptionTracks(playerResponse) {
+    const tracks = playerResponse?.captions?.playerCaptionsTracklistRenderer?.captionTracks;
+    if (!Array.isArray(tracks)) return [];
+    return tracks
+      .filter((track) => track?.baseUrl)
+      .sort((left, right) => captionTrackScore(right) - captionTrackScore(left));
+  }
+
+  function captionTrackFetchUrl(track) {
+    const url = new URL(String(track.baseUrl).replace(/&amp;/g, '&'), location.href);
+    url.searchParams.set('fmt', 'json3');
+    return url.toString();
+  }
+
+  function parseJson3Transcript(data) {
+    return (data?.events || [])
+      .map((event) => (event.segs || []).map((seg) => seg.utf8 || '').join(''))
+      .map(cleanTranscriptSegment)
+      .filter(Boolean)
+      .join(' ');
+  }
+
+  function parseXmlTranscript(xml) {
+    const doc = new DOMParser().parseFromString(xml, 'text/xml');
+    return Array.from(doc.querySelectorAll('text'))
+      .map((node) => cleanTranscriptSegment(node.textContent))
+      .filter(Boolean)
+      .join(' ');
+  }
+
+  async function fetchCaptionTrackTranscript(track) {
+    const response = await fetch(captionTrackFetchUrl(track), { credentials: 'include' });
+    if (!response.ok) throw new Error(`caption request returned HTTP ${response.status}`);
+
+    const body = await response.text();
+    const trimmed = body.trim();
+    const text = trimmed.startsWith('{')
+      ? parseJson3Transcript(JSON.parse(trimmed))
+      : parseXmlTranscript(body);
+
+    if (text.length < 50) throw new Error('caption track returned too little text');
+    return text;
+  }
+
+  async function getCaptionTrackTranscript(diagnostics = []) {
+    const playerResponse = readPlayerResponseFromScripts();
+    if (!playerResponse) {
+      diagnostics.push('No YouTube player caption metadata was found.');
+      return '';
+    }
+
+    const tracks = sortedCaptionTracks(playerResponse);
+    if (!tracks.length) {
+      diagnostics.push('YouTube player metadata did not include usable caption tracks.');
+      return '';
+    }
+
+    for (const track of tracks) {
+      try {
+        const transcript = await fetchCaptionTrackTranscript(track);
+        console.info(`Loaded transcript from YouTube caption track: ${captionTrackLabel(track)}`);
+        return transcript;
+      } catch (error) {
+        diagnostics.push(`${captionTrackLabel(track)} failed: ${error.message}`);
+      }
+    }
+
+    return '';
+  }
+
+  async function openTranscriptPanel(diagnostics = []) {
     if (getVisibleTranscriptPanel()) return true;
 
     const expandBtn = document.querySelector('ytd-text-inline-expander[is-collapsed] #expand, ytd-watch-metadata #description-inline-expander, #description-inline-expander, #description #expand');
@@ -194,7 +346,10 @@
       });
     }
 
-    if (!transcriptButton) return false;
+    if (!transcriptButton) {
+      diagnostics.push('The visible transcript button was not found.');
+      return false;
+    }
     transcriptButton.scrollIntoView({ block: 'center', behavior: 'smooth' });
     await sleep(300);
     transcriptButton.click();
@@ -203,6 +358,7 @@
       await sleep(500);
       if (getVisibleTranscriptPanel()) return true;
     }
+    diagnostics.push('The transcript button was clicked, but no visible transcript panel appeared.');
     return false;
   }
 
@@ -234,13 +390,17 @@
     return cleanTranscriptSegment(clone.textContent);
   }
 
-  async function getTranscriptText() {
+  async function getTranscriptText(diagnostics = []) {
+    let sawPanel = false;
+    let sawRows = false;
+
     for (let attempt = 0; attempt < 30; attempt += 1) {
       const panel = getVisibleTranscriptPanel();
       if (!panel) {
         await sleep(1000);
         continue;
       }
+      sawPanel = true;
 
       let rows = [];
       for (const selector of SELECTORS.rows) {
@@ -253,6 +413,7 @@
           if (rows.length) break;
         }
       }
+      if (rows.length) sawRows = true;
 
       const text = rows
         .map(readTranscriptSegment)
@@ -262,6 +423,10 @@
       if (text.length >= 50) return text;
       await sleep(1000);
     }
+
+    diagnostics.push(sawPanel
+      ? (sawRows ? 'The visible transcript rows stayed empty.' : 'The visible transcript panel did not expose transcript rows.')
+      : 'The visible transcript panel did not appear.');
     return '';
   }
 
@@ -271,6 +436,36 @@
     } catch {
       return location.href;
     }
+  }
+
+  function beginLaunch() {
+    const context = {
+      id: launchSequence + 1,
+      videoId: currentVideoId(),
+    };
+    launchSequence = context.id;
+    activeLaunch = context;
+    return context;
+  }
+
+  function isLaunchCurrent(context) {
+    return Boolean(
+      context
+      && activeLaunch?.id === context.id
+      && location.pathname === '/watch'
+      && currentVideoId() === context.videoId
+    );
+  }
+
+  function finishLaunch(context) {
+    if (activeLaunch?.id === context?.id) activeLaunch = null;
+    if (activeLaunchPromise?.context?.id === context?.id) activeLaunchPromise = null;
+  }
+
+  function invalidateLaunches() {
+    launchSequence += 1;
+    activeLaunch = null;
+    activeLaunchPromise = null;
   }
 
   function cacheKey(videoId = currentVideoId()) {
@@ -300,12 +495,46 @@
     });
   }
 
+  async function readExistingSavedSummary(videoId = currentVideoId(), timeoutMs = SUMMARY_RESPONSE_TIMEOUT_MS) {
+    const result = await sendMessage({ type: 'FIND_EXISTING_SUMMARY', videoId }, timeoutMs);
+    if (result?.ok && result.found && result.markdown) return result;
+    if (result && !result.ok) {
+      console.warn('Existing YouTube summary lookup failed:', result.error);
+    }
+    return null;
+  }
+
+  async function loadSummaryResult(result) {
+    state = {
+      ...state,
+      video: result.video || state.video,
+      markdown: result.markdown || '',
+      path: result.path || '',
+      category: result.category || 'General',
+      model: result.model || DEFAULT_MODEL,
+      busy: false,
+    };
+    try {
+      await writeCachedSummary(state);
+    } catch (error) {
+      console.warn('Could not cache loaded YouTube summary:', error);
+    }
+  }
+
   async function extractVideo() {
     if (location.pathname !== '/watch') throw new Error('This only works on YouTube watch pages.');
-    const opened = await openTranscriptPanel();
-    if (!opened) throw new Error('Could not find/open the YouTube transcript panel.');
-    const transcript = await getTranscriptText();
-    if (!transcript) throw new Error('Transcript was empty or unavailable.');
+    const diagnostics = [];
+    let transcript = await getCaptionTrackTranscript(diagnostics);
+
+    if (!transcript) {
+      const opened = await openTranscriptPanel(diagnostics);
+      if (opened) transcript = await getTranscriptText(diagnostics);
+    }
+
+    if (!transcript) {
+      const detail = diagnostics.length ? ` ${diagnostics.slice(-4).join(' ')}` : '';
+      throw new Error(`Transcript was empty or unavailable.${detail}`);
+    }
 
     const url = location.href;
     const videoId = new URL(location.href).searchParams.get('v') || '';
@@ -856,33 +1085,82 @@
     if (summary) renderMarkdown(state.markdown || '', summary);
     if (pathLine) pathLine.textContent = state.path ? `Saved: ${state.path}` : '';
     if (state.markdown) {
-      setStatus(fromCache ? `Loaded cached summary. Redo summary uses ${effectiveModel(state.model)}.` : `Done. Category: ${state.category}`);
+      setStatus(fromCache ? `Loaded saved summary. Redo summary uses ${effectiveModel(state.model)}.` : `Done. Category: ${state.category}`);
       setActionButton('Open Summary', 'is-done');
+    }
+  }
+
+  function renderErrorState(error) {
+    const summary = overlayPart('summary');
+    if (summary) {
+      summary.replaceChildren();
+      const title = document.createElement('h2');
+      title.textContent = 'Summary failed';
+      const message = document.createElement('p');
+      message.textContent = error?.message || 'The summary could not be generated.';
+      summary.append(title, message);
     }
   }
 
   async function showOverlay() {
     if (state.busy) return;
+    if (activeLaunchPromise) return activeLaunchPromise.promise;
 
-    const cached = await readCachedSummary();
-    if (cached?.markdown) {
-      state = { ...state, ...cached, busy: false };
-      buildOverlay().hidden = false;
-      renderState(true);
-      return;
-    }
+    const launchContext = beginLaunch();
+    const overlay = buildOverlay();
+    overlay.hidden = true;
+    setProgress(1, 'Checking for a cached summary…');
 
-    state = { ...state, video: null, markdown: '', path: '', category: 'General', busy: false };
-    await runSummary({ force: false, model: effectiveModel(state.model), openWhenReady: true });
+    const promise = (async () => {
+      try {
+        const cached = await readCachedSummary(launchContext.videoId);
+        if (!isLaunchCurrent(launchContext)) return;
+        if (cached?.markdown) {
+          state = { ...state, ...cached, busy: false };
+          overlay.hidden = false;
+          renderState(true);
+          return;
+        }
+
+        setProgress(3, 'Checking saved Obsidian summary…');
+        const existing = await readExistingSavedSummary(launchContext.videoId, EXISTING_SUMMARY_LOOKUP_TIMEOUT_MS);
+        if (!isLaunchCurrent(launchContext)) return;
+        if (existing?.markdown) {
+          await loadSummaryResult(existing);
+          if (!isLaunchCurrent(launchContext)) return;
+          overlay.hidden = false;
+          renderState(true);
+          return;
+        }
+
+        state = { ...state, video: null, markdown: '', path: '', category: 'General', busy: false };
+        await runSummary({ force: true, model: effectiveModel(state.model), openWhenReady: true, launchContext });
+      } finally {
+        finishLaunch(launchContext);
+      }
+    })();
+    activeLaunchPromise = { context: launchContext, promise };
+    return promise;
   }
 
-  async function runSummary({ force, model, openWhenReady = false }) {
+  async function runSummary({ force, model, openWhenReady = false, launchContext = null }) {
     if (state.busy) return;
+    const context = launchContext || beginLaunch();
 
     if (!force) {
       const cached = await readCachedSummary();
+      if (!isLaunchCurrent(context)) return;
       if (cached?.markdown) {
         state = { ...state, ...cached, busy: false };
+        buildOverlay().hidden = false;
+        renderState(true);
+        return;
+      }
+      const existing = await readExistingSavedSummary();
+      if (!isLaunchCurrent(context)) return;
+      if (existing?.markdown) {
+        await loadSummaryResult(existing);
+        if (!isLaunchCurrent(context)) return;
         buildOverlay().hidden = false;
         renderState(true);
         return;
@@ -895,14 +1173,21 @@
     try {
       setProgress(10, 'Extracting transcript…');
       const extracted = await extractVideo();
+      if (!isLaunchCurrent(context)) return;
       state.video = extracted.video;
       if (!openWhenReady) renderState(false);
       const selectedModel = model || effectiveModel(overlayPart('model')?.value.trim());
       setProgress(35, `Transcript ready. Sending to ${selectedModel}…`);
       const waitTimers = [
-        setTimeout(() => setProgress(50, `Still waiting on ${selectedModel}…`), 5000),
-        setTimeout(() => setProgress(65, selectedModel === DEFAULT_MODEL ? 'Mistral is still thinking…' : `Still waiting on ${selectedModel}…`), 8500),
-        setTimeout(() => setProgress(78, 'Finishing summary request…'), 12000),
+        setTimeout(() => {
+          if (isLaunchCurrent(context)) setProgress(50, `Still waiting on ${selectedModel}…`);
+        }, 5000),
+        setTimeout(() => {
+          if (isLaunchCurrent(context)) setProgress(65, selectedModel === DEFAULT_MODEL ? 'Mistral is still thinking…' : `Still waiting on ${selectedModel}…`);
+        }, 8500),
+        setTimeout(() => {
+          if (isLaunchCurrent(context)) setProgress(78, 'Finishing summary request…');
+        }, 12000),
       ];
       let result;
       try {
@@ -910,6 +1195,7 @@
       } finally {
         waitTimers.forEach((timer) => clearTimeout(timer));
       }
+      if (!isLaunchCurrent(context)) return;
       setProgress(90, 'Saving Markdown note…');
       if (!result.ok) throw new Error(result.error || 'Summarize failed.');
       state = {
@@ -921,17 +1207,26 @@
         model: result.model || selectedModel,
         busy: false,
       };
-      await writeCachedSummary(state);
+      let cacheWarning = '';
+      try {
+        await writeCachedSummary(state);
+      } catch (error) {
+        cacheWarning = ` Summary generated, but cache save failed: ${error.message}`;
+        console.warn('Could not cache YouTube summary:', error);
+      }
       setProgress(100, 'Summary ready.');
       buildOverlay().hidden = false;
       renderState(false);
+      if (cacheWarning) setStatus(`Done. Category: ${state.category}.${cacheWarning}`);
     } catch (error) {
       setActionButton('Error', 'is-error');
       if (openWhenReady) buildOverlay().hidden = false;
+      renderErrorState(error);
       setStatus(`Error: ${error.message}`);
       console.error('YouTube summary failed:', error);
     } finally {
-      setBusy(false);
+      if (isLaunchCurrent(context)) setBusy(false);
+      if (!launchContext) finishLaunch(context);
     }
   }
 
@@ -1026,6 +1321,7 @@
       const videoId = currentVideoId();
       if (videoId !== lastObservedVideoId) {
         lastObservedVideoId = videoId;
+        invalidateLaunches();
         state = { ...state, video: null, markdown: '', path: '', category: 'General', busy: false };
         document.getElementById(OVERLAY_ID)?.remove();
       }
@@ -1033,6 +1329,7 @@
       if (!state.markdown && !state.busy) setActionButton('Summarize', '');
       return;
     }
+    invalidateLaunches();
     document.getElementById(BUTTON_ID)?.remove();
   }
 
