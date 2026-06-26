@@ -70,8 +70,8 @@ coverage/
 *.pem
 *.key
 *.p12
+youtube-summary-overlay-extension/background/local-secrets.js
 
 # generated bundles / repo dumps
 repomix-output.xml
 *.log
-

@@ -56,7 +56,7 @@
   }
 
   function storageLocal() {
-    return globalThis.chrome?.storage?.local || null;
+    return globalThis.chrome?.storage?.local || globalThis.browser?.storage?.local || null;
   }
 
   function cacheKey(url = location.href) {
@@ -89,16 +89,45 @@
         resolve({ ok: false, error: `No extension response after ${Math.round(timeoutMs / 1000)}s.` });
       }, timeoutMs) : null;
 
-      chrome.runtime.sendMessage(message, (response) => {
-        if (settled) return;
-        settled = true;
-        if (timeout) clearTimeout(timeout);
-        if (chrome.runtime.lastError) {
-          resolve({ ok: false, error: chrome.runtime.lastError.message });
-          return;
+      let retries = 0;
+      const attemptSend = () => {
+        try {
+          chrome.runtime.sendMessage(message, (response) => {
+            if (settled) return;
+            const lastError = chrome.runtime.lastError || globalThis.browser?.runtime?.lastError;
+            if (lastError) {
+              if (retries < 2 && lastError.message?.includes('Receiving end does not exist')) {
+                retries++;
+                setTimeout(attemptSend, 150);
+                return;
+              }
+              settled = true;
+              if (timeout) clearTimeout(timeout);
+              resolve({ ok: false, error: lastError.message });
+              return;
+            }
+            if (response !== undefined) {
+              settled = true;
+              if (timeout) clearTimeout(timeout);
+              resolve(response);
+              return;
+            }
+            if (retries < 2) {
+              retries++;
+              setTimeout(attemptSend, 150);
+              return;
+            }
+            settled = true;
+            if (timeout) clearTimeout(timeout);
+            resolve({ ok: false, error: 'No response.' });
+          });
+        } catch (error) {
+          settled = true;
+          if (timeout) clearTimeout(timeout);
+          resolve({ ok: false, error: error?.message || String(error) });
         }
-        resolve(response || { ok: false, error: 'No response.' });
-      });
+      };
+      attemptSend();
     });
   }
 

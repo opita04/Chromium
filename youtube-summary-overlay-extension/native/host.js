@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-const { saveMarkdown, summarizeAndSave } = require('./summarizer');
+const { findExistingSummary, saveMarkdown, summarizeAndSave } = require('./summarizer');
 
 function readNativeMessage(input) {
   if (input.length < 4) return null;
@@ -22,6 +22,9 @@ async function handleMessage(message) {
   if (message?.type === 'saveMarkdown') {
     if (!message.markdown) throw new Error('No Markdown provided.');
     return saveMarkdown({ video: message.video, markdown: message.markdown, category: message.category, previousPath: message.previousPath });
+  }
+  if (message?.type === 'findExistingSummary') {
+    return findExistingSummary({ videoId: message.videoId });
   }
   throw new Error(`Unknown native message type: ${message?.type || 'missing'}`);
 }

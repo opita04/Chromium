@@ -8,8 +8,10 @@ const FALLBACK_MODEL = 'mistralai/mistral-small-24b-instruct-2501';
 const CONTEXT_LENGTH_FALLBACK_MODEL = 'google/gemini-2.5-flash-lite';
 const PREVIOUS_DEFAULT_MODELS = new Set(['nvidia/nemotron-3-ultra-550b-a55b:free']);
 const FALLBACK_SOURCE_MODELS = new Set(['openrouter/free', 'nvidia/nemotron-3-ultra-550b-a55b:free']);
-const OPENROUTER_TIMEOUT_MS = Number.parseInt(process.env.OPENROUTER_TIMEOUT_MS || '8000', 10);
+const OPENROUTER_TIMEOUT_MS = Number.parseInt(process.env.OPENROUTER_TIMEOUT_MS || '120000', 10);
+const OPENROUTER_MAX_TOKENS = Number.parseInt(process.env.OPENROUTER_MAX_TOKENS || '2600', 10);
 const DEFAULT_OUTPUT_DIR = '/Users/opita/Documents/Obsidian/youtube-summaries';
+const SUMMARY_INDEX_FILE = '.summary-index.json';
 const CATEGORIES = [
   'Political',
   'Coding',
@@ -41,9 +43,15 @@ function loadDotEnv(filePath) {
   return env;
 }
 
-function keychainLookup(service) {
+function securityKeychainLookup(service, account = 'opita') {
   try {
-    return execFileSync('/usr/bin/security', ['find-generic-password', '-s', service, '-w'], {
+    return execFileSync('/usr/bin/security', [
+      'find-generic-password',
+      '-a', account,
+      '-s', service,
+      '-w',
+      '/Users/opita/Library/Keychains/login.keychain-db',
+    ], {
       encoding: 'utf8',
       stdio: ['ignore', 'pipe', 'ignore'],
     }).trim();
@@ -52,12 +60,47 @@ function keychainLookup(service) {
   }
 }
 
+function getYoutubeBwsAccessToken() {
+  return process.env.YOUTUBE_BWS_ACCESS_TOKEN || securityKeychainLookup(process.env.YOUTUBE_BWS_KEYCHAIN_SERVICE || 'youtube-bws-access-token');
+}
+
+function bwsSecretMap() {
+  const token = getYoutubeBwsAccessToken();
+  if (!token) return {};
+  try {
+    const env = { ...process.env, BWS_ACCESS_TOKEN: token };
+    const listRaw = execFileSync('/Users/opita/.hermes/bin/bws', ['secret', 'list'], {
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'ignore'],
+      env,
+    });
+    const wanted = new Set(['OPENROUTER_API_KEY', 'OPENROUTER_KEY_YOUTUBE']);
+    const out = {};
+    for (const item of JSON.parse(listRaw || '[]')) {
+      const key = item.key || item.name;
+      if (!wanted.has(key) || !item.id) continue;
+      const gotRaw = execFileSync('/Users/opita/.hermes/bin/bws', ['secret', 'get', item.id], {
+        encoding: 'utf8',
+        stdio: ['ignore', 'pipe', 'ignore'],
+        env,
+      });
+      const value = String(JSON.parse(gotRaw || '{}').value || '').trim();
+      if (value) out[key] = value;
+    }
+    if (!out.OPENROUTER_API_KEY && out.OPENROUTER_KEY_YOUTUBE) out.OPENROUTER_API_KEY = out.OPENROUTER_KEY_YOUTUBE;
+    return out;
+  } catch {
+    return {};
+  }
+}
+
 function getOpenRouterApiKey() {
   const env = {
     ...loadDotEnv(path.join(os.homedir(), '.hermes', '.env')),
     ...process.env,
   };
-  return env.OPENROUTER_API_KEY || env.OPENROUTER_APIKEY || keychainLookup('OPENROUTER_API_KEY') || keychainLookup('openrouter') || keychainLookup('openrouter-api-key');
+  const bws = bwsSecretMap();
+  return env.OPENROUTER_API_KEY || env.OPENROUTER_APIKEY || bws.OPENROUTER_API_KEY || '';
 }
 
 function logNative(message, details = {}) {
@@ -85,6 +128,182 @@ function isoDate(value = new Date()) {
 
 function escapeRegExp(value) {
   return String(value).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function parseFrontmatter(markdown) {
+  const text = String(markdown || '');
+  const match = text.match(/^---\n([\s\S]*?)\n---\n?/);
+  if (!match) return {};
+  const data = {};
+  for (const line of match[1].split(/\r?\n/)) {
+    const idx = line.indexOf(':');
+    if (idx === -1) continue;
+    const key = line.slice(0, idx).trim();
+    let value = line.slice(idx + 1).trim();
+    if (!key) continue;
+    if ((value.startsWith('"') && value.endsWith('"')) || (value.startsWith("'") && value.endsWith("'"))) {
+      try {
+        value = JSON.parse(value);
+      } catch {
+        value = value.slice(1, -1);
+      }
+    }
+    data[key] = value;
+  }
+  return data;
+}
+
+function indexPathFor(outputDir = DEFAULT_OUTPUT_DIR) {
+  return path.join(outputDir, SUMMARY_INDEX_FILE);
+}
+
+function readSummaryIndex(outputDir = DEFAULT_OUTPUT_DIR) {
+  const indexPath = indexPathFor(outputDir);
+  try {
+    return JSON.parse(fs.readFileSync(indexPath, 'utf8')) || {};
+  } catch (error) {
+    if (isPermissionError(error)) throw obsidianAccessError(error, outputDir);
+    return {};
+  }
+}
+function writeSummaryIndex(index, outputDir = DEFAULT_OUTPUT_DIR) {
+  ensureOutputDirAccessible(outputDir);
+  const indexPath = indexPathFor(outputDir);
+  try {
+    fs.mkdirSync(path.dirname(indexPath), { recursive: true });
+    fs.writeFileSync(indexPath, JSON.stringify(index, null, 2) + '\n', 'utf8');
+  } catch (error) {
+    if (isPermissionError(error)) throw obsidianAccessError(error, outputDir);
+    throw error;
+  }
+}
+function relativeSummaryPath(filePath, outputDir = DEFAULT_OUTPUT_DIR) {
+  return path.relative(outputDir, filePath).split(path.sep).join('/');
+}
+
+function absoluteSummaryPath(indexEntryPath, outputDir = DEFAULT_OUTPUT_DIR) {
+  if (!indexEntryPath) return '';
+  return path.isAbsolute(indexEntryPath) ? indexEntryPath : path.join(outputDir, indexEntryPath);
+}
+
+function isPermissionError(error) {
+  return ['EACCES', 'EPERM'].includes(error?.code);
+}
+
+function obsidianAccessError(error, outputDir = DEFAULT_OUTPUT_DIR) {
+  const message = [
+    'Cannot access the Obsidian summary folder: ' + outputDir,
+    (error.code || 'Error') + ': ' + error.message,
+    'macOS privacy permissions are blocking the native host from reading/writing this folder.',
+    'Fix: grant Full Disk Access / Files and Folders access to the browser that launched the extension (Safari/Brave/Chrome) and Terminal/Node if you run tests manually, then reload the browser extension.',
+  ].join(' ');
+  const friendly = new Error(message);
+  friendly.code = error.code;
+  friendly.cause = error;
+  return friendly;
+}
+
+function ensureOutputDirAccessible(outputDir = DEFAULT_OUTPUT_DIR) {
+  try {
+    fs.mkdirSync(outputDir, { recursive: true });
+    fs.accessSync(outputDir, fs.constants.R_OK | fs.constants.W_OK);
+  } catch (error) {
+    if (isPermissionError(error)) throw obsidianAccessError(error, outputDir);
+    throw error;
+  }
+}
+
+function listMarkdownFiles(dir, results = []) {
+  if (!fs.existsSync(dir)) return results;
+  try {
+    for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+      if (entry.name.startsWith('.')) continue;
+      const fullPath = path.join(dir, entry.name);
+      if (entry.isDirectory()) {
+        listMarkdownFiles(fullPath, results);
+      } else if (entry.isFile() && entry.name.toLowerCase().endsWith('.md')) {
+        results.push(fullPath);
+      }
+    }
+    return results;
+  } catch (error) {
+    if (isPermissionError(error)) throw obsidianAccessError(error, dir);
+    throw error;
+  }
+}
+function summaryPayloadFromFile(filePath, outputDir = DEFAULT_OUTPUT_DIR) {
+  const markdown = fs.readFileSync(filePath, 'utf8');
+  const frontmatter = parseFrontmatter(markdown);
+  const videoId = String(frontmatter.video_id || '').trim();
+  if (!videoId) return null;
+  const category = CATEGORIES.includes(frontmatter.category) ? frontmatter.category : 'General';
+  const video = {
+    title: String(frontmatter.title || 'Untitled Video'),
+    channel: String(frontmatter.channel || 'YouTube Channel'),
+    url: String(frontmatter.url || (videoId ? `https://www.youtube.com/watch?v=${videoId}` : '')),
+    videoId,
+    transcript: '',
+  };
+  return {
+    ok: true,
+    found: true,
+    markdown: stripSourceTextSection(markdown, video),
+    path: filePath,
+    relativePath: relativeSummaryPath(filePath, outputDir),
+    category,
+    model: String(frontmatter.model || DEFAULT_MODEL),
+    generatedAt: String(frontmatter.generated_at || ''),
+    video,
+  };
+}
+
+function updateSummaryIndexForFile(filePath, outputDir = DEFAULT_OUTPUT_DIR) {
+  const payload = summaryPayloadFromFile(filePath, outputDir);
+  if (!payload?.video?.videoId) return;
+  const index = readSummaryIndex(outputDir);
+  index[payload.video.videoId] = {
+    path: payload.relativePath,
+    title: payload.video.title,
+    channel: payload.video.channel,
+    url: payload.video.url,
+    category: payload.category,
+    model: payload.model,
+    generated_at: payload.generatedAt,
+    indexed_at: new Date().toISOString(),
+  };
+  writeSummaryIndex(index, outputDir);
+}
+
+function findExistingSummary({ videoId, outputDir = DEFAULT_OUTPUT_DIR }) {
+  const id = String(videoId || '').trim();
+  if (!id) return { ok: true, found: false };
+  ensureOutputDirAccessible(outputDir);
+
+  const index = readSummaryIndex(outputDir);
+  const indexedPath = absoluteSummaryPath(index[id]?.path, outputDir);
+  if (indexedPath && fs.existsSync(indexedPath)) {
+    const payload = summaryPayloadFromFile(indexedPath, outputDir);
+    if (payload?.video?.videoId === id) return payload;
+  }
+
+  for (const filePath of listMarkdownFiles(outputDir)) {
+    let payload = null;
+    try {
+      payload = summaryPayloadFromFile(filePath, outputDir);
+    } catch {
+      continue;
+    }
+    if (payload?.video?.videoId === id) {
+      updateSummaryIndexForFile(filePath, outputDir);
+      return payload;
+    }
+  }
+
+  if (index[id]) {
+    delete index[id];
+    writeSummaryIndex(index, outputDir);
+  }
+  return { ok: true, found: false };
 }
 
 function scoreCategory(text, terms) {
@@ -272,11 +491,11 @@ async function requestOpenRouter({ video, model }) {
           { role: 'user', content: buildPrompt(source) },
         ],
         temperature: 0.2,
-        max_tokens: 2600,
+        max_tokens: Number.isFinite(OPENROUTER_MAX_TOKENS) ? OPENROUTER_MAX_TOKENS : 2600,
       }),
     });
     logNative('openrouter response received', { model, status: response.status, ms: Date.now() - startedAt });
-    data = await response.json().catch(() => ({}));
+    data = await readOpenRouterJson(response);
   } finally {
     clearTimeout(timeout);
   }
@@ -285,13 +504,59 @@ async function requestOpenRouter({ video, model }) {
     throw new Error(`OpenRouter ${response.status}: ${message}`);
   }
 
-  const markdown = data?.choices?.[0]?.message?.content?.trim();
-  if (!markdown) throw new Error('OpenRouter returned an empty summary.');
+  const choice = data?.choices?.[0] || {};
+  const markdown = extractSummaryContent(choice.message);
+  if (!markdown) {
+    logNative('openrouter returned empty summary', {
+      model,
+      finishReason: choice.finish_reason || '',
+      choiceCount: Array.isArray(data?.choices) ? data.choices.length : 0,
+    });
+    throw emptySummaryError({ model, data });
+  }
   return { markdown, model, usage: data.usage || null };
+}
+
+async function readOpenRouterJson(response) {
+  try {
+    return await response.json();
+  } catch (error) {
+    if (error?.name === 'AbortError') throw error;
+    throw new Error(`OpenRouter returned an unreadable response body: ${error?.message || String(error)}`);
+  }
 }
 
 function isContextLengthError(error) {
   return /maximum context length|context length|requested about \d+ tokens/i.test(String(error?.message || ''));
+}
+
+function extractSummaryContent(message = {}) {
+  const content = message.content;
+  if (typeof content === 'string') return content.trim();
+  if (Array.isArray(content)) {
+    return content
+      .map((part) => {
+        if (typeof part === 'string') return part;
+        return part?.text || part?.content || '';
+      })
+      .join('\n')
+      .trim();
+  }
+  return '';
+}
+
+function emptySummaryError({ model, data }) {
+  const choice = data?.choices?.[0] || {};
+  const error = new Error('OpenRouter returned an empty summary.');
+  error.name = 'EmptySummaryError';
+  error.model = model;
+  error.finishReason = choice.finish_reason || '';
+  error.choiceCount = Array.isArray(data?.choices) ? data.choices.length : 0;
+  return error;
+}
+
+function isEmptySummaryError(error) {
+  return error?.name === 'EmptySummaryError';
 }
 
 async function callOpenRouter({ video, model = DEFAULT_MODEL }) {
@@ -302,6 +567,27 @@ async function callOpenRouter({ video, model = DEFAULT_MODEL }) {
     if (selectedModel !== CONTEXT_LENGTH_FALLBACK_MODEL && isContextLengthError(error)) {
       logNative('openrouter context too long, falling back', { model: selectedModel, fallbackModel: CONTEXT_LENGTH_FALLBACK_MODEL });
       return requestOpenRouter({ video, model: CONTEXT_LENGTH_FALLBACK_MODEL });
+    }
+    if (isEmptySummaryError(error)) {
+      logNative('openrouter empty summary, retrying model once', {
+        model: selectedModel,
+        finishReason: error.finishReason,
+        choiceCount: error.choiceCount,
+      });
+      try {
+        return await requestOpenRouter({ video, model: selectedModel });
+      } catch (retryError) {
+        if (isEmptySummaryError(retryError) && selectedModel !== CONTEXT_LENGTH_FALLBACK_MODEL) {
+          logNative('openrouter empty summary retry failed, falling back', {
+            model: selectedModel,
+            fallbackModel: CONTEXT_LENGTH_FALLBACK_MODEL,
+            finishReason: retryError.finishReason,
+            choiceCount: retryError.choiceCount,
+          });
+          return requestOpenRouter({ video, model: CONTEXT_LENGTH_FALLBACK_MODEL });
+        }
+        throw retryError;
+      }
     }
     if (FALLBACK_SOURCE_MODELS.has(selectedModel) && error?.name === 'AbortError') {
       logNative('openrouter model timed out, falling back', { model: selectedModel, fallbackModel: FALLBACK_MODEL, timeoutMs: OPENROUTER_TIMEOUT_MS });
@@ -389,14 +675,22 @@ function isSafePreviousPath(previousPath, outputDir) {
 }
 
 function saveMarkdown({ video, markdown, outputDir = DEFAULT_OUTPUT_DIR, category, previousPath }) {
+  ensureOutputDirAccessible(outputDir);
   const safeCategory = CATEGORIES.includes(category) ? category : classifyCategory(video, markdown);
   const markdownWithCategory = ensureSourceTextSection(updateMarkdownCategory(markdown, safeCategory), video);
   const targetPath = outputPathFor(video, outputDir, safeCategory);
   fs.mkdirSync(path.dirname(targetPath), { recursive: true });
   fs.writeFileSync(targetPath, markdownWithCategory.endsWith('\n') ? markdownWithCategory : `${markdownWithCategory}\n`, 'utf8');
+  updateSummaryIndexForFile(targetPath, outputDir);
 
   if (isSafePreviousPath(previousPath, outputDir) && path.resolve(previousPath) !== path.resolve(targetPath) && fs.existsSync(previousPath)) {
     fs.unlinkSync(previousPath);
+    const index = readSummaryIndex(outputDir);
+    const source = normalizeSource(video);
+    if (source.videoId && index[source.videoId]?.path === relativeSummaryPath(previousPath, outputDir)) {
+      delete index[source.videoId];
+      writeSummaryIndex(index, outputDir);
+    }
   }
 
   return { ok: true, path: targetPath, category: safeCategory, markdown: stripSourceTextSection(markdownWithCategory, video) };
@@ -422,6 +716,7 @@ module.exports = {
   buildPrompt,
   callOpenRouter,
   classifyCategory,
+  findExistingSummary,
   getOpenRouterApiKey,
   normalizeSource,
   outputPathFor,

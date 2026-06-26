@@ -2,7 +2,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
-const { CATEGORIES, CONTEXT_LENGTH_FALLBACK_MODEL, DEFAULT_MODEL, FALLBACK_MODEL, DEFAULT_OUTPUT_DIR, buildMarkdown, buildPrompt, callOpenRouter, classifyCategory, normalizeSource, outputPathFor, saveMarkdown, systemPromptFor, updateMarkdownCategory } = require('../native/summarizer');
+const { CATEGORIES, CONTEXT_LENGTH_FALLBACK_MODEL, DEFAULT_MODEL, FALLBACK_MODEL, DEFAULT_OUTPUT_DIR, buildMarkdown, buildPrompt, callOpenRouter, classifyCategory, findExistingSummary, normalizeSource, outputPathFor, saveMarkdown, systemPromptFor, updateMarkdownCategory } = require('../native/summarizer');
 
 assert.equal(DEFAULT_MODEL, 'mistralai/mistral-small-24b-instruct-2501');
 assert.equal(FALLBACK_MODEL, 'mistralai/mistral-small-24b-instruct-2501');
@@ -50,6 +50,16 @@ assert.match(fs.readFileSync(result.path, 'utf8'), /Testing works/);
 assert.match(fs.readFileSync(result.path, 'utf8'), /## Transcript\n\nThis is a transcript about testing/);
 assert.equal(path.dirname(result.path), path.join(tmp, 'Educational'));
 assert.doesNotMatch(path.basename(outputPathFor(video, tmp, 'Educational')), /[\\/:*?"<>|]/);
+const existing = findExistingSummary({ videoId: video.videoId, outputDir: tmp });
+assert.equal(existing.ok, true);
+assert.equal(existing.found, true);
+assert.equal(existing.video.videoId, video.videoId);
+assert.equal(existing.category, 'Educational');
+assert.equal(existing.path, result.path);
+assert.match(existing.markdown, /Testing works/);
+assert.equal((existing.markdown.match(/## Transcript/g) || []).length, 0);
+assert.equal(fs.existsSync(path.join(tmp, '.summary-index.json')), true);
+assert.equal(findExistingSummary({ videoId: 'missing12345', outputDir: tmp }).found, false);
 
 const moved = saveMarkdown({ video, markdown: result.markdown, outputDir: tmp, category: 'Coding', previousPath: result.path });
 assert.equal(moved.category, 'Coding');
@@ -58,6 +68,9 @@ assert.equal(fs.existsSync(moved.path), true);
 assert.equal(fs.existsSync(result.path), false);
 assert.match(moved.markdown, /category: "Coding"/);
 assert.match(fs.readFileSync(moved.path, 'utf8'), /category: "Coding"/);
+const existingMoved = findExistingSummary({ videoId: video.videoId, outputDir: tmp });
+assert.equal(existingMoved.path, moved.path);
+assert.equal(existingMoved.category, 'Coding');
 assert.equal((moved.markdown.match(/## Transcript/g) || []).length, 0);
 assert.equal((fs.readFileSync(moved.path, 'utf8').match(/## Transcript/g) || []).length, 1);
 assert.match(updateMarkdownCategory(markdown, 'General'), /category: "General"/);
@@ -153,6 +166,31 @@ assert.doesNotMatch(buildMarkdown({ video: { ...video, channel: '' }, summaryMar
 assert.equal(CATEGORIES.includes(classifyCategory(video, markdown)), true);
 assert.equal(classifyCategory(webpage, webpageMarkdown), 'AI');
 
+function testPermissionErrorsAreActionable() {
+  const originalAccessSync = fs.accessSync;
+  const inaccessibleDir = path.join(os.tmpdir(), 'yt-summary-inaccessible');
+  fs.accessSync = (target, mode) => {
+    if (target === inaccessibleDir) {
+      const error = new Error('operation not permitted');
+      error.code = 'EPERM';
+      throw error;
+    }
+    return originalAccessSync.call(fs, target, mode);
+  };
+  try {
+    assert.throws(
+      () => findExistingSummary({ videoId: video.videoId, outputDir: inaccessibleDir }),
+      /Cannot access the Obsidian summary folder: .*macOS privacy permissions.*Full Disk Access/
+    );
+    assert.throws(
+      () => saveMarkdown({ video, markdown, outputDir: inaccessibleDir, category: 'Coding' }),
+      /Cannot access the Obsidian summary folder: .*macOS privacy permissions.*Full Disk Access/
+    );
+  } finally {
+    fs.accessSync = originalAccessSync;
+  }
+}
+
 async function testContextLengthFallback() {
   const originalFetch = global.fetch;
   const originalApiKey = process.env.OPENROUTER_API_KEY;
@@ -232,9 +270,113 @@ async function testPreviousDefaultNormalizesToMistral() {
   }
 }
 
+async function testEmptyMistralResponseRetriesSameModel() {
+  const originalFetch = global.fetch;
+  const originalApiKey = process.env.OPENROUTER_API_KEY;
+  const calls = [];
+  process.env.OPENROUTER_API_KEY = 'test-key';
+  global.fetch = async (_url, options) => {
+    const body = JSON.parse(options.body);
+    calls.push(body.model);
+    return {
+      ok: true,
+      status: 200,
+      json: async () => ({
+        choices: [{ finish_reason: 'stop', message: { content: calls.length === 1 ? '' : '# Retry summary' } }],
+        usage: { prompt_tokens: 12, completion_tokens: 3 },
+      }),
+    };
+  };
+
+  try {
+    const result = await callOpenRouter({ video, model: DEFAULT_MODEL });
+    assert.equal(result.model, DEFAULT_MODEL);
+    assert.equal(result.markdown, '# Retry summary');
+    assert.deepEqual(calls, [DEFAULT_MODEL, DEFAULT_MODEL]);
+  } finally {
+    global.fetch = originalFetch;
+    if (originalApiKey === undefined) {
+      delete process.env.OPENROUTER_API_KEY;
+    } else {
+      process.env.OPENROUTER_API_KEY = originalApiKey;
+    }
+  }
+}
+
+async function testRepeatedEmptySummaryFallsBack() {
+  const originalFetch = global.fetch;
+  const originalApiKey = process.env.OPENROUTER_API_KEY;
+  const calls = [];
+  process.env.OPENROUTER_API_KEY = 'test-key';
+  global.fetch = async (_url, options) => {
+    const body = JSON.parse(options.body);
+    calls.push(body.model);
+    return {
+      ok: true,
+      status: 200,
+      json: async () => ({
+        choices: [{ finish_reason: 'stop', message: { content: calls.length < 3 ? '' : '# Backup summary' } }],
+        usage: { prompt_tokens: 12, completion_tokens: 3 },
+      }),
+    };
+  };
+
+  try {
+    const result = await callOpenRouter({ video, model: DEFAULT_MODEL });
+    assert.equal(result.model, CONTEXT_LENGTH_FALLBACK_MODEL);
+    assert.equal(result.markdown, '# Backup summary');
+    assert.deepEqual(calls, [DEFAULT_MODEL, DEFAULT_MODEL, CONTEXT_LENGTH_FALLBACK_MODEL]);
+  } finally {
+    global.fetch = originalFetch;
+    if (originalApiKey === undefined) {
+      delete process.env.OPENROUTER_API_KEY;
+    } else {
+      process.env.OPENROUTER_API_KEY = originalApiKey;
+    }
+  }
+}
+
+async function testUnreadableOpenRouterBodyDoesNotBecomeEmptySummary() {
+  const originalFetch = global.fetch;
+  const originalApiKey = process.env.OPENROUTER_API_KEY;
+  process.env.OPENROUTER_API_KEY = 'test-key';
+  global.fetch = async () => ({
+    ok: true,
+    status: 200,
+    json: async () => {
+      const error = new Error('The operation was aborted.');
+      error.name = 'AbortError';
+      throw error;
+    },
+  });
+
+  try {
+    await assert.rejects(
+      () => callOpenRouter({ video, model: DEFAULT_MODEL }),
+      (error) => {
+        assert.match(error.message, /OpenRouter timed out after/);
+        assert.doesNotMatch(error.message, /empty summary/i);
+        return true;
+      }
+    );
+  } finally {
+    global.fetch = originalFetch;
+    if (originalApiKey === undefined) {
+      delete process.env.OPENROUTER_API_KEY;
+    } else {
+      process.env.OPENROUTER_API_KEY = originalApiKey;
+    }
+  }
+}
+
+testPermissionErrorsAreActionable();
+
 (async () => {
   await testContextLengthFallback();
   await testPreviousDefaultNormalizesToMistral();
+  await testEmptyMistralResponseRetriesSameModel();
+  await testRepeatedEmptySummaryFallsBack();
+  await testUnreadableOpenRouterBodyDoesNotBecomeEmptySummary();
   console.log('summarizer.test.js passed');
 })().catch((error) => {
   console.error(error);

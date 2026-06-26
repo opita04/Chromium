@@ -1,0 +1,254 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Ideation: Safari Summary Button Launch Lifecycle</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --bg: #f7f4ee;
+      --ink: #1b1f24;
+      --muted: #5e6875;
+      --line: #d9d2c6;
+      --panel: #ffffff;
+      --panel-soft: #eef6f4;
+      --accent: #087f75;
+      --accent-ink: #075c55;
+      --warn-soft: #fff3d6;
+      --warn-ink: #7a4b00;
+      --cut-soft: #f7e7e2;
+      --cut-ink: #842f23;
+      --code: #24313f;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      background: var(--bg);
+      color: var(--ink);
+      font: 15px/1.58 -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", sans-serif;
+    }
+    a { color: var(--accent-ink); text-underline-offset: 3px; }
+    code { color: var(--code); background: rgba(8, 127, 117, 0.09); border: 1px solid rgba(8, 127, 117, 0.16); border-radius: 5px; padding: 1px 5px; }
+    .page { max-width: 980px; margin: 0 auto; padding: 44px 22px 64px; }
+    header { border-bottom: 1px solid var(--line); padding-bottom: 22px; margin-bottom: 28px; }
+    .eyebrow { color: var(--accent-ink); font-size: 12px; font-weight: 800; letter-spacing: .08em; text-transform: uppercase; margin: 0 0 8px; }
+    h1 { font-size: clamp(32px, 5vw, 52px); line-height: 1.05; margin: 0 0 14px; letter-spacing: 0; }
+    h2 { font-size: 23px; line-height: 1.2; margin: 34px 0 12px; }
+    h3 { font-size: 17px; margin: 0 0 8px; }
+    p { max-width: 74ch; }
+    .meta { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 18px; }
+    .pill { border: 1px solid rgba(8, 127, 117, .2); background: var(--panel-soft); color: var(--accent-ink); border-radius: 999px; padding: 5px 10px; font-size: 12px; font-weight: 700; }
+    .grounding, .axes, .idea, .cut-table-wrap { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 18px; box-shadow: 0 1px 0 rgba(27,31,36,.04); }
+    .grounding ul, .axes ul { margin: 8px 0 0; padding-left: 20px; }
+    .nav { display: grid; gap: 8px; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); margin: 16px 0 20px; }
+    .nav a { display: block; border: 1px solid var(--line); background: var(--panel); border-radius: 8px; padding: 10px 12px; text-decoration: none; font-weight: 750; }
+    .idea { margin: 16px 0; }
+    .idea-head { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 10px; }
+    .rank { display: inline-flex; align-items: center; justify-content: center; width: 34px; height: 34px; border-radius: 999px; background: var(--accent); color: white; font-weight: 900; margin-right: 8px; }
+    .idea h3 { display: flex; align-items: center; gap: 0; }
+    .stats { display: flex; flex-wrap: wrap; gap: 6px; }
+    .stat { background: #f1eee7; color: #333941; border: 1px solid var(--line); border-radius: 999px; padding: 4px 9px; font-size: 12px; font-weight: 700; }
+    .field { margin: 9px 0; }
+    .field b { display: block; color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: .06em; margin-bottom: 2px; }
+    .diagram { margin: 14px 0; border: 1px solid var(--line); border-radius: 8px; background: #fbfaf7; padding: 12px; overflow-x: auto; }
+    svg { display: block; max-width: 100%; height: auto; }
+    table { width: 100%; border-collapse: collapse; font-size: 14px; }
+    th, td { border-bottom: 1px solid var(--line); padding: 9px 8px; text-align: left; vertical-align: top; }
+    th { color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: .06em; }
+    .cut-table-wrap { overflow-x: auto; }
+    .source-list li { margin-bottom: 7px; }
+    footer { color: var(--muted); border-top: 1px solid var(--line); margin-top: 34px; padding-top: 18px; font-size: 13px; }
+  </style>
+</head>
+<body>
+  <main class="page">
+    <header>
+      <p class="eyebrow">Compound Engineering Ideation</p>
+      <h1>Ideation: Safari Summary Button Launch Lifecycle</h1>
+      <p>The focused problem: after Safari support was added, clicking the YouTube summary button now opens the overlay immediately. The prior and documented behavior is that the small button shows progress while the extension loads/extracts/summarizes, then the modal appears only after a cached or newly generated summary is ready.</p>
+      <div class="meta">
+        <span class="pill">Date: <time datetime="2026-06-16">2026-06-16</time></span>
+        <span class="pill">Topic: safari-summary-button-launch-lifecycle</span>
+        <span class="pill">Focus: Safari summary button launch timing</span>
+        <span class="pill">Mode: repo-grounded</span>
+      </div>
+    </header>
+
+    <section>
+      <h2>Grounding Context</h2>
+      <div class="grounding">
+        <ul>
+          <li>The README explicitly promises that progress stays on the button and the large modal opens only after the summary is ready.</li>
+          <li>The current YouTube content script violates that invariant in <code>showOverlay()</code> by setting <code>buildOverlay().hidden = false</code> before cache lookup, existing-summary lookup, or summary generation.</li>
+          <li>The current <code>runSummary()</code> function has an <code>openWhenReady</code> parameter, but its default and call site invert the desired behavior: <code>showOverlay()</code> passes <code>openWhenReady: false</code>, and <code>runSummary()</code> opens the modal immediately when that value is false.</li>
+          <li>Safari support introduced a browser-direct OpenRouter path in <code>background/service-worker.js</code> when direct credentials are available, while Chrome/Brave can still use the native host path. That means readiness, save ability, and cache lookup now vary by backend capability.</li>
+          <li>Prior repo memory says visible progress stalls should be treated as runtime/cache/native-host behavior, not syntax-only issues. In this repo, <code>35%</code> means transcript is ready and the extension is waiting on <code>SUMMARIZE_AND_SAVE</code>; cached per-video overlay state can also preserve older behavior.</li>
+          <li>External context: Apple documents Safari Web Extensions as sharing common extension formats and APIs with Chrome/Firefox-style extensions, while Safari native-app messaging is a separate Safari app-extension path. That supports treating Safari as compatible at the content-script/UI layer but different at the local native integration boundary.</li>
+        </ul>
+      </div>
+    </section>
+
+    <section>
+      <h2>Topic Axes</h2>
+      <div class="axes">
+        <ul>
+          <li>Launch timing contract</li>
+          <li>Safari versus Chrome capability boundary</li>
+          <li>Progress and error visibility</li>
+          <li>Cache and saved-summary behavior</li>
+          <li>Regression verification</li>
+        </ul>
+      </div>
+    </section>
+
+    <section>
+      <h2>Ranked Ideas</h2>
+      <nav class="nav" aria-label="Ranked ideas">
+        <a href="#idea-1">1. Restore Deferred Modal Opening</a>
+        <a href="#idea-2">2. Make Summary Lifecycle a Small State Machine</a>
+        <a href="#idea-3">3. Add a Capability-Aware Safari/Chrome Backend Adapter</a>
+        <a href="#idea-4">4. Separate Cached-Ready Opens from Generate Opens</a>
+        <a href="#idea-5">5. Add No-Premature-Overlay Regression Tests</a>
+        <a href="#idea-6">6. Add Safari-Mode Runtime Diagnostics</a>
+      </nav>
+
+      <article class="idea" id="idea-1">
+        <div class="idea-head">
+          <h3><span class="rank">1</span>Restore Deferred Modal Opening</h3>
+          <div class="stats"><span class="stat">Axis: Launch timing contract</span><span class="stat">Confidence: 92%</span><span class="stat">Complexity: Low</span></div>
+        </div>
+        <p class="field"><b>Description</b>Make the YouTube button click start work in the background and keep the modal hidden until a cached, existing, or newly generated summary has markdown. The small circular button remains the visible progress surface at 5/10/35/50/65/78/90/100. On success, the modal opens; on failure, open it only if an error needs readable detail.</p>
+        <div class="diagram">
+          <svg viewBox="0 0 760 145" role="img" aria-label="Deferred modal flow from button progress to ready overlay">
+            <defs><marker id="arrow" markerWidth="10" markerHeight="8" refX="9" refY="4" orient="auto"><path d="M0,0 L10,4 L0,8 z" fill="#087f75"/></marker></defs>
+            <rect x="20" y="40" width="130" height="54" rx="8" fill="#eef6f4" stroke="#087f75"/>
+            <text x="85" y="62" text-anchor="middle" font-size="13" font-weight="700" fill="#075c55">Click S button</text>
+            <text x="85" y="80" text-anchor="middle" font-size="12" fill="#40505b">modal hidden</text>
+            <line x1="150" y1="67" x2="230" y2="67" stroke="#087f75" stroke-width="2" marker-end="url(#arrow)"/>
+            <rect x="230" y="40" width="140" height="54" rx="8" fill="#fff3d6" stroke="#d79a13"/>
+            <text x="300" y="62" text-anchor="middle" font-size="13" font-weight="700" fill="#7a4b00">Button progress</text>
+            <text x="300" y="80" text-anchor="middle" font-size="12" fill="#7a4b00">5% to 100%</text>
+            <line x1="370" y1="67" x2="450" y2="67" stroke="#087f75" stroke-width="2" marker-end="url(#arrow)"/>
+            <rect x="450" y="40" width="130" height="54" rx="8" fill="#eef6f4" stroke="#087f75"/>
+            <text x="515" y="62" text-anchor="middle" font-size="13" font-weight="700" fill="#075c55">Markdown ready</text>
+            <text x="515" y="80" text-anchor="middle" font-size="12" fill="#40505b">state has result</text>
+            <line x1="580" y1="67" x2="650" y2="67" stroke="#087f75" stroke-width="2" marker-end="url(#arrow)"/>
+            <rect x="650" y="40" width="90" height="54" rx="8" fill="#ffffff" stroke="#087f75"/>
+            <text x="695" y="62" text-anchor="middle" font-size="13" font-weight="700" fill="#075c55">Open</text>
+            <text x="695" y="80" text-anchor="middle" font-size="12" fill="#40505b">overlay</text>
+          </svg>
+        </div>
+        <p class="field"><b>Basis</b>direct: <code>README.md</code> says the modal opens only after the summary is ready; <code>content/youtube-transcript.js</code> currently opens it at the start of <code>showOverlay()</code> and again from <code>runSummary()</code> when <code>openWhenReady</code> is false.</p>
+        <p class="field"><b>Rationale</b>This is the smallest idea that directly restores the expected behavior without forcing a larger Safari architecture decision. It also matches the user's report exactly.</p>
+        <p class="field"><b>Downsides</b>Error reporting needs care: hiding the modal during work means failures need either a concise button/error state or a deliberate modal-open-on-error path.</p>
+      </article>
+
+      <article class="idea" id="idea-2">
+        <div class="idea-head">
+          <h3><span class="rank">2</span>Make Summary Lifecycle a Small State Machine</h3>
+          <div class="stats"><span class="stat">Axis: Progress and error visibility</span><span class="stat">Confidence: 84%</span><span class="stat">Complexity: Medium</span></div>
+        </div>
+        <p class="field"><b>Description</b>Replace boolean combinations like <code>busy</code>, <code>force</code>, and <code>openWhenReady</code> with explicit phases: <code>idle</code>, <code>checking-cache</code>, <code>checking-existing</code>, <code>extracting</code>, <code>summarizing</code>, <code>ready</code>, and <code>error</code>. Each phase declares whether the overlay is allowed to be visible and what the action button should show.</p>
+        <p class="field"><b>Basis</b>direct: <code>showOverlay()</code> and <code>runSummary()</code> currently share responsibility for cache lookup, existing-summary lookup, modal visibility, button state, progress, and generation. The bug comes from the visibility responsibility leaking into the wrong phase.</p>
+        <p class="field"><b>Rationale</b>The current regression is a symptom of state being implicit. A small lifecycle model would make Safari and Chrome differences easier to handle without reintroducing a half-loaded modal later.</p>
+        <p class="field"><b>Downsides</b>More code than the direct fix. It should be done only if the team expects more Safari/native-host branching soon.</p>
+      </article>
+
+      <article class="idea" id="idea-3">
+        <div class="idea-head">
+          <h3><span class="rank">3</span>Add a Capability-Aware Safari/Chrome Backend Adapter</h3>
+          <div class="stats"><span class="stat">Axis: Safari versus Chrome capability boundary</span><span class="stat">Confidence: 80%</span><span class="stat">Complexity: Medium</span></div>
+        </div>
+        <p class="field"><b>Description</b>Introduce a single backend capability result from the service worker: <code>browser-direct</code>, <code>native-host</code>, or <code>unavailable</code>. The content script can then decide what to check, what to skip, and what copy to show without using Safari-specific comments as control flow.</p>
+        <div class="diagram">
+          <svg viewBox="0 0 760 170" role="img" aria-label="Capability adapter separates UI lifecycle from backend paths">
+            <defs><marker id="arrow2" markerWidth="10" markerHeight="8" refX="9" refY="4" orient="auto"><path d="M0,0 L10,4 L0,8 z" fill="#087f75"/></marker></defs>
+            <rect x="30" y="58" width="145" height="56" rx="8" fill="#ffffff" stroke="#087f75"/>
+            <text x="102" y="82" text-anchor="middle" font-size="13" font-weight="700" fill="#075c55">Content script</text>
+            <text x="102" y="100" text-anchor="middle" font-size="12" fill="#40505b">same UI contract</text>
+            <line x1="175" y1="86" x2="270" y2="86" stroke="#087f75" stroke-width="2" marker-end="url(#arrow2)"/>
+            <rect x="270" y="46" width="160" height="80" rx="8" fill="#eef6f4" stroke="#087f75"/>
+            <text x="350" y="72" text-anchor="middle" font-size="13" font-weight="700" fill="#075c55">Backend adapter</text>
+            <text x="350" y="92" text-anchor="middle" font-size="12" fill="#40505b">native / direct / none</text>
+            <line x1="430" y1="66" x2="545" y2="40" stroke="#087f75" stroke-width="2" marker-end="url(#arrow2)"/>
+            <line x1="430" y1="106" x2="545" y2="132" stroke="#087f75" stroke-width="2" marker-end="url(#arrow2)"/>
+            <rect x="545" y="18" width="165" height="48" rx="8" fill="#fff3d6" stroke="#d79a13"/>
+            <text x="627" y="47" text-anchor="middle" font-size="13" font-weight="700" fill="#7a4b00">Safari direct fetch</text>
+            <rect x="545" y="108" width="165" height="48" rx="8" fill="#eef6f4" stroke="#087f75"/>
+            <text x="627" y="137" text-anchor="middle" font-size="13" font-weight="700" fill="#075c55">Chrome native host</text>
+          </svg>
+        </div>
+        <p class="field"><b>Basis</b>external: Apple's Safari Web Extensions docs position Safari extensions as using common web-extension formats and APIs, while Apple's native app messaging docs describe a Safari app/native messaging route. direct: this repo now has both direct OpenRouter and native-host branches in <code>background/service-worker.js</code>.</p>
+        <p class="field"><b>Rationale</b>Safari compatibility should not mean content scripts guessing which local capabilities exist. A capability adapter keeps the launch timing fix clean and gives later Safari work a stable place to live.</p>
+        <p class="field"><b>Downsides</b>Requires touching service-worker and content-script message contracts. It is not necessary to fix the immediate premature-open bug.</p>
+      </article>
+
+      <article class="idea" id="idea-4">
+        <div class="idea-head">
+          <h3><span class="rank">4</span>Separate Cached-Ready Opens from Generate Opens</h3>
+          <div class="stats"><span class="stat">Axis: Cache and saved-summary behavior</span><span class="stat">Confidence: 82%</span><span class="stat">Complexity: Low</span></div>
+        </div>
+        <p class="field"><b>Description</b>Split the current click behavior into two named paths: <code>openReadySummary()</code> for cached/existing markdown and <code>generateThenOpenSummary()</code> for fresh work. Cache hits can open instantly; cache misses never open an empty modal. This keeps the good fast path without compromising the fresh-generation path.</p>
+        <p class="field"><b>Basis</b>direct: <code>readCachedSummary()</code>, <code>readExistingSavedSummary()</code>, and <code>runSummary()</code> already exist, but the current wrapper opens the overlay before it knows which path applies. Memory also notes cached overlay state is per-video under <code>youtubeSummaryOverlay:&lt;videoId&gt;</code>.</p>
+        <p class="field"><b>Rationale</b>The user's old behavior probably felt instant on already-summarized videos and quiet on new videos. Naming those two paths prevents the Safari shortcut from flattening them into one "open first" flow.</p>
+        <p class="field"><b>Downsides</b>Still leaves more implicit state than the state-machine idea, so future branches may need another pass.</p>
+      </article>
+
+      <article class="idea" id="idea-5">
+        <div class="idea-head">
+          <h3><span class="rank">5</span>Add No-Premature-Overlay Regression Tests</h3>
+          <div class="stats"><span class="stat">Axis: Regression verification</span><span class="stat">Confidence: 78%</span><span class="stat">Complexity: Medium</span></div>
+        </div>
+        <p class="field"><b>Description</b>Add a content-script VM or lightweight DOM test proving that, on a cache miss, clicking the button updates progress but does not unhide the overlay until after <code>SUMMARIZE_AND_SAVE</code> returns markdown. Add paired cases for cache hit, existing summary hit, direct-mode miss, native-host miss, and failure.</p>
+        <p class="field"><b>Basis</b>direct: the repo already has <code>tests/youtube-transcript-content.test.js</code> using Node's <code>vm</code> to exercise the content script. The current bug is fully expressible as DOM state plus mocked extension messages.</p>
+        <p class="field"><b>Rationale</b>Safari was added under pressure, and lifecycle regressions are easy to reintroduce. A focused test would make the README promise executable.</p>
+        <p class="field"><b>Downsides</b>The current content script is not deeply test-harnessed, so mocking DOM and Chrome APIs may be a little fiddly.</p>
+      </article>
+
+      <article class="idea" id="idea-6">
+        <div class="idea-head">
+          <h3><span class="rank">6</span>Add Safari-Mode Runtime Diagnostics</h3>
+          <div class="stats"><span class="stat">Axis: Safari versus Chrome capability boundary</span><span class="stat">Confidence: 70%</span><span class="stat">Complexity: Low</span></div>
+        </div>
+        <p class="field"><b>Description</b>Add concise debug logging around click, cache hit/miss, backend mode, progress phase, response result, and overlay visibility transitions. The log should make it obvious whether Safari used browser-direct mode, skipped Obsidian lookup, opened from cache, or opened after a new summary.</p>
+        <p class="field"><b>Basis</b>direct: prior issues in this repo were diagnosed through runtime logs and cache state; the current code has a new browser-direct branch that cannot write to Obsidian and intentionally skips native lookup.</p>
+        <p class="field"><b>Rationale</b>This gives fast proof after the fix lands. It is especially useful because Safari extension debugging can make background/content message timing harder to trust from source inspection alone.</p>
+        <p class="field"><b>Downsides</b>Diagnostics do not fix the behavior by themselves. Logging should be easy to disable or quiet once the Safari path stabilizes.</p>
+      </article>
+    </section>
+
+    <section>
+      <h2>Rejection Summary</h2>
+      <div class="cut-table-wrap">
+        <table>
+          <thead><tr><th>#</th><th>Idea</th><th>Reason Rejected</th></tr></thead>
+          <tbody>
+            <tr><td>1</td><td>Just increase <code>SUMMARY_RESPONSE_TIMEOUT_MS</code></td><td>Does not address the overlay opening before work completes.</td></tr>
+            <tr><td>2</td><td>Always open a loading modal</td><td>Conflicts with the documented and user-expected behavior.</td></tr>
+            <tr><td>3</td><td>Use the sidepanel for Safari instead of overlay</td><td>Scope overrun; replaces the surface rather than fixing the button lifecycle.</td></tr>
+            <tr><td>4</td><td>Remove existing-summary lookup entirely</td><td>Would simplify Safari but regress Chrome/Brave's useful native-host saved-summary path.</td></tr>
+            <tr><td>5</td><td>Special-case all Safari behavior in the content script</td><td>Less robust than a backend capability boundary; likely to duplicate logic.</td></tr>
+            <tr><td>6</td><td>Convert immediately to a full Safari native app messaging implementation</td><td>Too expensive for the immediate symptom; better handled after the lifecycle contract is restored.</td></tr>
+            <tr><td>7</td><td>Disable cache reads to force fresh behavior</td><td>Would erase a good fast path and fight the repo's existing per-video storage model.</td></tr>
+            <tr><td>8</td><td>Only change README copy</td><td>Not actionable against the broken runtime behavior.</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <section>
+      <h2>Sources And References</h2>
+      <ul class="source-list">
+        <li><a href="https://github.com/opita04/Chromium/blob/main/youtube-summary-overlay-extension/README.md">README.md</a> for the documented launch/progress contract.</li>
+        <li><a href="https://github.com/opita04/Chromium/blob/main/youtube-summary-overlay-extension/content/youtube-transcript.js">content/youtube-transcript.js</a> for current overlay visibility and progress behavior.</li>
+        <li><a href="https://github.com/opita04/Chromium/blob/main/youtube-summary-overlay-extension/background/service-worker.js">background/service-worker.js</a> for native-host versus browser-direct backend behavior.</li>
+        <li><a href="https://developer.apple.com/documentation/safariservices/safari-web-extensions">Apple Safari Web Extensions documentation</a> for the Safari web-extension compatibility frame.</li>
+        <li><a href="https://developer.apple.com/documentation/SafariServices/messaging-a-web-extension-s-native-app">Apple Messaging a Web Extension's Native App documentation</a> for the Safari native-app messaging boundary.</li>
+      </ul>
+    </section>
+
+    <footer class="composition-signal">Composed 2026-06-16T00:00:00-07:00 by ce-ideate from the user report about Safari summary-button launch timing.</footer>
+  </main>
+</body>
+</html>

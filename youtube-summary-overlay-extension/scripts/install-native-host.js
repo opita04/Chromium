@@ -33,5 +33,5 @@ fs.chmodSync(path.join(ROOT, 'native', 'host.js'), 0o755);
 
 console.log(`Installed native host ${HOST_NAME}`);
 console.log(`Allowed extension id: ${EXTENSION_ID}`);
-console.log('Output folder: /Users/opita/Documents/Obsidian/Hermes/youtube-summaries');
+console.log('Output folder: /Users/opita/Documents/Obsidian/youtube-summaries');
 console.log('API key source: ~/.hermes/.env OPENROUTER_API_KEY, env var, or macOS Keychain service openrouter.');
