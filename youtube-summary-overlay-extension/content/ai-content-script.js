@@ -313,11 +313,13 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message.type === "INJECT_ANALYSIS_PROMPT") {
     if (lastProcessedPrompt === message.analysisPrompt) {
       console.log("[AI CONTENT SCRIPT] Ignoring duplicate message");
+      sendResponse({ status: "ignored" });
       return;
     }
     lastProcessedPrompt = message.analysisPrompt;
     const { platformId, analysisPrompt } = message;
     console.log("[AI CONTENT SCRIPT] Received INJECT_ANALYSIS_PROMPT message:", analysisPrompt);
     pasteAndSend(platformId, analysisPrompt);
+    sendResponse({ status: "injected" });
   }
 });

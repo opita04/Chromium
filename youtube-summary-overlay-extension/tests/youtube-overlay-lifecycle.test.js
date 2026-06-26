@@ -265,8 +265,7 @@ function createSandbox({ cached = null, existingSummary = null, summaryResult = 
       }
       return Promise.resolve({ ok: false, error: `Unexpected message ${message.type}` });
     })();
-    if (runtimePromiseMode) {
-      assert.equal(callback, undefined, 'promise-mode runtime should be called without a callback');
+    if (runtimePromiseMode && callback === undefined) {
       return responsePromise;
     }
     if (message.type === 'FIND_EXISTING_SUMMARY') {
@@ -463,7 +462,7 @@ async function testStalledCacheReadFallsThroughToGeneration() {
   assert.match(overlay.querySelector('[data-role="summary"]').textContent, /Ready Summary/);
 }
 
-async function testPromiseRuntimeMessageResponseCompletesGeneration() {
+async function testSafariRuntimeWithChromeCallbackCompletesGeneration() {
   const env = createSandbox({ runtimePromiseMode: true });
   await openFromToolbar(env);
   const overlay = env.document.getElementById('opita-youtube-summary-overlay');
@@ -524,7 +523,7 @@ async function testStaleLaunchDoesNotOpenAfterVideoNavigation() {
   await testCacheHitOpensImmediately();
   await testSavedSummaryHitOpensImmediatelyWithoutGeneration();
   await testStalledCacheReadFallsThroughToGeneration();
-  await testPromiseRuntimeMessageResponseCompletesGeneration();
+  await testSafariRuntimeWithChromeCallbackCompletesGeneration();
   await testCacheWriteFailureStillShowsReadySummary();
   await testGenerationErrorShowsExplicitErrorState();
   await testStaleLaunchDoesNotOpenAfterVideoNavigation();

@@ -5,352 +5,102 @@ const vm = require('node:vm');
 
 const root = path.resolve(__dirname, '..');
 const scriptSource = fs.readFileSync(path.join(root, 'background/service-worker.js'), 'utf8');
+const contentScriptSource = fs.readFileSync(path.join(root, 'content/youtube-transcript.js'), 'utf8');
 
-function createServiceWorker({ nativeHandler, directKey = '', localGlobalKey = '', fetchHandler = null, storageCallbackOnly = false, browserPromiseMode = false }) {
+function createServiceWorker({ fetchHandler, activeTab = null, firstTabMessageRejects = false, initialStorage = {}, chromeRuntimeId = 'lbbncpgjnoffnhihjnomphmabaieaaoo', browserRuntimeId = '' }) {
   let messageListener = null;
-  const nativeMessages = [];
+  let actionClickListener = null;
+  let tabMessageCount = 0;
   const fetchCalls = [];
+  const executedScripts = [];
+  const storageData = { ...initialStorage };
   const sandbox = {
-    AbortController,
-    URL,
-    console,
-    clearTimeout,
-    setTimeout,
-    fetch: async (...args) => {
-      fetchCalls.push(args);
-      if (!fetchHandler) throw new Error('fetch should not be called in this contract test');
-      return fetchHandler(...args);
-    },
-    importScripts(scriptPath) {
-      assert.equal(scriptPath, 'local-secrets.js');
-      if (localGlobalKey) sandbox.self.OPENROUTER_API_KEY = localGlobalKey;
-    },
-    browser: browserPromiseMode ? { runtime: { onMessage: {} } } : undefined,
+    process, AbortController, URL, console, clearTimeout, setTimeout,
+    fetch: async (...args) => { fetchCalls.push(args); if (!fetchHandler) throw new Error('fetch should not be called in this contract test'); return fetchHandler(...args); },
+    importScripts() { throw new Error('local secrets should not be loaded by the transport-only service worker'); },
     chrome: {
-      action: {
-        onClicked: { addListener() {} },
-      },
-      runtime: {
-        lastError: null,
-        onMessage: {
-          addListener(listener) {
-            messageListener = listener;
-          },
-        },
-        sendNativeMessage(_host, message, callback) {
-          nativeMessages.push(message);
-          Promise.resolve()
-            .then(() => nativeHandler(message))
-            .then((response) => {
-              sandbox.chrome.runtime.lastError = null;
-              callback(response);
-            })
-            .catch((error) => {
-              sandbox.chrome.runtime.lastError = { message: error.message };
-              callback(null);
-              sandbox.chrome.runtime.lastError = null;
-            });
-        },
-        getURL: (assetPath) => `chrome-extension://test/${assetPath}`,
-      },
-      storage: {
-        local: {
-          get(keys, callback) {
-            const keyList = Array.isArray(keys) ? keys : [keys];
-            const data = {};
-            for (const key of keyList) {
-              if (directKey && (key === 'openRouterApiKey' || key === 'OPENROUTER_API_KEY')) {
-                data[key] = directKey;
-              }
-            }
-            if (storageCallbackOnly) {
-              if (callback) callback(data);
-              return undefined;
-            }
-            return Promise.resolve(data);
-          },
-        },
-      },
+      action: { onClicked: { addListener(listener) { actionClickListener = listener; } } },
+      runtime: { id: chromeRuntimeId, lastError: null, onMessage: { addListener(listener) { messageListener = listener; } }, getURL: (assetPath) => 'chrome-extension://test/' + assetPath },
+      storage: { local: { get: async (key) => { if (Array.isArray(key)) return Object.fromEntries(key.map((entry) => [entry, storageData[entry]])); if (typeof key === 'string') return { [key]: storageData[key] }; return { ...storageData }; }, set: async (values) => { Object.assign(storageData, values || {}); } } },
       tabs: {
-        query: async () => [],
-        sendMessage: async () => ({ ok: true }),
-        create() {},
-        onUpdated: {
-          addListener() {},
-          removeListener() {},
-        },
+        query: async () => activeTab ? [activeTab] : [],
+        sendMessage: async () => { tabMessageCount += 1; if (firstTabMessageRejects && tabMessageCount === 1) throw new Error('Could not establish connection. Receiving end does not exist.'); return { ok: true }; },
+        create() {}, onUpdated: { addListener() {}, removeListener() {} },
       },
-      scripting: {
-        executeScript: async () => {},
-      },
+      scripting: { executeScript: async (details) => { executedScripts.push(details); } },
     },
   };
-  sandbox.self = sandbox;
-  sandbox.globalThis = sandbox;
-
-  vm.runInNewContext(scriptSource, sandbox, {
-    filename: path.join(root, 'background/service-worker.js'),
-  });
-
-  return {
-    fetchCalls,
-    nativeMessages,
-    send(message) {
-      return new Promise((resolve) => {
-        messageListener(message, {}, resolve);
-      });
-    },
-    sendAsPromise(message) {
-      return messageListener(message, {}, () => {});
-    },
-    sendWithCallbackInBrowserMode(message) {
-      return new Promise((resolve) => {
-        const returned = messageListener(message, {}, resolve);
-        assert.equal(typeof returned?.then, 'function');
-      });
-    },
-  };
+  if (browserRuntimeId) sandbox.browser = { runtime: { id: browserRuntimeId } };
+  sandbox.self = sandbox; sandbox.globalThis = sandbox;
+  vm.runInNewContext(scriptSource, sandbox, { filename: path.join(root, 'background/service-worker.js') });
+  return { fetchCalls, executedScripts, get tabMessageCount() { return tabMessageCount; }, send(message) { return new Promise((resolve) => { messageListener(message, {}, resolve); }); }, async clickAction(tab = activeTab) { assert.equal(typeof actionClickListener, 'function'); actionClickListener(tab); await new Promise((resolve) => setTimeout(resolve, 0)); await new Promise((resolve) => setTimeout(resolve, 0)); } };
 }
 
-async function testSummarizePrefersReachableNativeHostEvenWithDirectKey() {
-  const worker = createServiceWorker({
-    directKey: 'sk-test-storage-key',
-    nativeHandler: async (message) => {
-      assert.equal(message.type, 'summarizeAndSave');
-      return {
-        ok: true,
-        markdown: '# Native Summary',
-        path: '/tmp/native.md',
-        category: 'General',
-        model: message.model,
-      };
-    },
-  });
+function jsonResponse(payload, ok = true, status = ok ? 200 : 500) { return { ok, status, statusText: ok ? 'OK' : 'Error', json: async () => payload }; }
+function assertLocalAuthHeader(options) { assert.equal(options.headers['X-YouTube-Summary-Token'], 'test-local-token'); }
 
-  const result = await worker.send({
-    type: 'SUMMARIZE_AND_SAVE',
-    video: { videoId: 'abc123', title: 'Example', transcript: 'Long transcript '.repeat(20) },
-    model: 'mistralai/mistral-small-24b-instruct-2501',
-  });
-  assert.equal(result.ok, true);
-  assert.equal(result.path, '/tmp/native.md');
-  assert.deepEqual(worker.nativeMessages.map((message) => message.type), ['summarizeAndSave']);
-  assert.equal(worker.fetchCalls.length, 0);
+async function testSummarizeRoutesThroughLocalJobApi() {
+  const worker = createServiceWorker({ fetchHandler: async (url, options = {}) => {
+    assert.match(url, /^http:\/\/127\.0\.0\.1:4789\/api\/youtube-summary\//); assert.ok(!/openrouter\.ai/.test(url));
+    if (url.endsWith('/api/youtube-summary/extension-auth')) { assert.equal(options.method, 'GET'); assert.equal(options.headers['X-YouTube-Summary-Extension-Id'], 'lbbncpgjnoffnhihjnomphmabaieaaoo'); return jsonResponse({ ok: true, headerName: 'X-YouTube-Summary-Token', token: 'test-local-token' }); }
+    if (url.endsWith('/api/youtube-summary/jobs')) { assert.equal(options.method, 'POST'); assert.equal(options.headers['Content-Type'], 'application/json'); assertLocalAuthHeader(options); const body = JSON.parse(options.body); assert.equal(body.video.videoId, 'abc123'); assert.equal(body.model, 'mistralai/mistral-small-24b-instruct-2501'); return jsonResponse({ ok: true, id: 'job-1', status: 'queued' }, true, 202); }
+    if (url.endsWith('/api/youtube-summary/jobs/job-1')) { assert.equal(options.method, 'GET'); return jsonResponse({ ok: true, id: 'job-1', status: 'succeeded', result: { ok: true, markdown: '# Local Summary', path: '/tmp/local.md', category: 'General', model: 'mistralai/mistral-small-24b-instruct-2501' } }); }
+    throw new Error('unexpected fetch ' + url);
+  } });
+  const result = await worker.send({ type: 'SUMMARIZE_AND_SAVE', video: { videoId: 'abc123', title: 'Example', transcript: 'Long transcript '.repeat(20) }, model: 'mistralai/mistral-small-24b-instruct-2501' });
+  assert.equal(result.ok, true); assert.equal(result.markdown, '# Local Summary'); assert.equal(result.path, '/tmp/local.md');
+  assert.deepEqual(worker.fetchCalls.map(([url]) => new URL(url).pathname), ['/api/youtube-summary/extension-auth', '/api/youtube-summary/jobs', '/api/youtube-summary/jobs/job-1']);
 }
 
-async function testSummarizeFallsBackToDirectWhenNativeUnavailable() {
-  const worker = createServiceWorker({
-    directKey: 'sk-test-storage-key',
-    nativeHandler: async () => {
-      throw new Error('Native host unavailable');
-    },
-    fetchHandler: async (url, options) => {
-      assert.equal(url, 'https://openrouter.ai/api/v1/chat/completions');
-      assert.equal(options.headers.Authorization, 'Bearer sk-test-storage-key');
-      assert.equal(options.headers['HTTP-Referer'], 'https://www.youtube.com/watch?v=abc123');
-      assert.doesNotMatch(options.body, /token=secret|#frag/);
-      return {
-        ok: true,
-        json: async () => ({
-          choices: [{ message: { content: '# Direct Summary' } }],
-          usage: { total_tokens: 10 },
-        }),
-      };
-    },
-  });
-
-  const result = await worker.send({
-    type: 'SUMMARIZE_AND_SAVE',
-    video: {
-      videoId: 'abc123',
-      title: 'Example',
-      url: 'https://www.youtube.com/watch?v=abc123&token=secret#frag',
-      transcript: 'Long transcript '.repeat(20),
-    },
-    model: 'mistralai/mistral-small-24b-instruct-2501',
-  });
-  assert.equal(result.ok, true);
-  assert.equal(result.markdown, '# Direct Summary');
-  assert.equal(result.path, '');
-  assert.equal(result.saveMode, 'browser-direct');
-  assert.equal(result.nativeSaveUnavailable, true);
-  assert.deepEqual(worker.nativeMessages.map((message) => message.type), ['summarizeAndSave']);
-  assert.equal(worker.fetchCalls.length, 1);
+async function testLocalAuthBootstrapUsesAllowlistedIdWhenRuntimeIdIsMissingOrSafariScoped() {
+  for (const workerOptions of [
+    { chromeRuntimeId: '' },
+    { chromeRuntimeId: 'safari-web-extension', browserRuntimeId: 'safari-web-extension' },
+  ]) {
+    const worker = createServiceWorker({ ...workerOptions, fetchHandler: async (url, options = {}) => {
+      if (url.endsWith('/api/youtube-summary/extension-auth')) {
+        assert.equal(options.headers['X-YouTube-Summary-Extension-Id'], 'lbbncpgjnoffnhihjnomphmabaieaaoo');
+        return jsonResponse({ ok: true, headerName: 'X-YouTube-Summary-Token', token: 'test-local-token' });
+      }
+      if (url.endsWith('/api/youtube-summary/jobs')) return jsonResponse({ ok: true, id: 'job-1', status: 'queued' }, true, 202);
+      if (url.endsWith('/api/youtube-summary/jobs/job-1')) return jsonResponse({ ok: true, id: 'job-1', status: 'succeeded', result: { ok: true, markdown: '# Local Summary', path: '/tmp/local.md' } });
+      throw new Error('unexpected fetch ' + url);
+    } });
+    const result = await worker.send({ type: 'SUMMARIZE_AND_SAVE', video: { videoId: 'abc123', title: 'Example', transcript: 'Long transcript '.repeat(20) } });
+    assert.equal(result.ok, true);
+  }
 }
 
-async function testFindExistingPrefersReachableNativeHost() {
-  const worker = createServiceWorker({
-    nativeHandler: async (message) => {
-      assert.equal(message.type, 'findExistingSummary');
-      return {
-        ok: true,
-        found: true,
-        markdown: '# Existing',
-        path: '/tmp/existing.md',
-        category: 'General',
-      };
-    },
-  });
-
-  const result = await worker.send({ type: 'FIND_EXISTING_SUMMARY', videoId: 'abc123' });
-  assert.equal(result.ok, true);
-  assert.equal(result.found, true);
-  assert.equal(result.markdown, '# Existing');
-  assert.deepEqual(worker.nativeMessages.map((message) => message.type), ['findExistingSummary']);
+async function testSummarizeReturnsFailedLocalJobAsMessageResponse() {
+  const worker = createServiceWorker({ fetchHandler: async (url, options = {}) => { if (url.endsWith('/api/youtube-summary/extension-auth')) return jsonResponse({ ok: true, headerName: 'X-YouTube-Summary-Token', token: 'test-local-token' }); if (url.endsWith('/api/youtube-summary/jobs')) { assertLocalAuthHeader(options); return jsonResponse({ ok: true, id: 'job-2', status: 'queued' }, true, 202); } if (url.endsWith('/api/youtube-summary/jobs/job-2')) return jsonResponse({ ok: true, id: 'job-2', status: 'failed', error: 'No transcript provided.' }); throw new Error('unexpected fetch ' + url); } });
+  const result = await worker.send({ type: 'SUMMARIZE_AND_SAVE', video: { videoId: 'abc123', title: 'Example', transcript: '' } }); assert.equal(result.ok, false); assert.equal(result.error, 'No transcript provided.');
 }
 
-async function testSaveMarkdownPrefersReachableNativeHost() {
-  const worker = createServiceWorker({
-    nativeHandler: async (message) => {
-      assert.equal(message.type, 'saveMarkdown');
-      return {
-        ok: true,
-        markdown: message.markdown,
-        path: '/tmp/saved.md',
-        category: message.category,
-      };
-    },
-  });
-
-  const result = await worker.send({
-    type: 'SAVE_MARKDOWN',
-    video: { videoId: 'abc123', title: 'Example' },
-    markdown: '# Saved',
-    category: 'Coding',
-  });
-  assert.equal(result.ok, true);
-  assert.equal(result.path, '/tmp/saved.md');
-  assert.deepEqual(worker.nativeMessages.map((message) => message.type), ['saveMarkdown']);
+async function testFindExistingRoutesThroughLocalService() {
+  const worker = createServiceWorker({ fetchHandler: async (url, options = {}) => { assert.equal(options.method, 'GET'); assert.equal(url, 'http://127.0.0.1:4789/api/youtube-summary/existing?videoId=abc123'); return jsonResponse({ ok: true, found: true, markdown: '# Existing', path: '/tmp/existing.md', category: 'General' }); } });
+  const result = await worker.send({ type: 'FIND_EXISTING_SUMMARY', videoId: 'abc123' }); assert.equal(result.ok, true); assert.equal(result.found, true); assert.equal(result.markdown, '# Existing'); assert.equal(worker.fetchCalls.length, 1);
 }
 
-async function testFindExistingFallsBackWhenNativeUnavailable() {
-  const worker = createServiceWorker({
-    directKey: 'sk-test-storage-key',
-    nativeHandler: async () => {
-      throw new Error('Native host unavailable');
-    },
-  });
-
-  const result = await worker.send({ type: 'FIND_EXISTING_SUMMARY', videoId: 'abc123' });
-  assert.equal(result.ok, true);
-  assert.equal(result.found, false);
-  assert.equal(result.saveMode, 'browser-direct');
+async function testSaveMarkdownRoutesThroughLocalService() {
+  const worker = createServiceWorker({ fetchHandler: async (url, options = {}) => { if (url.endsWith('/api/youtube-summary/extension-auth')) return jsonResponse({ ok: true, headerName: 'X-YouTube-Summary-Token', token: 'test-local-token' }); assert.equal(url, 'http://127.0.0.1:4789/api/youtube-summary/save'); assert.equal(options.method, 'POST'); assert.equal(options.headers['Content-Type'], 'application/json'); assertLocalAuthHeader(options); const body = JSON.parse(options.body); assert.equal(body.markdown, '# Saved'); assert.equal(body.category, 'Coding'); assert.equal(body.previousPath, '/tmp/old.md'); return jsonResponse({ ok: true, markdown: '# Saved', path: '/tmp/saved.md', category: 'Coding' }); } });
+  const result = await worker.send({ type: 'SAVE_MARKDOWN', video: { videoId: 'abc123', title: 'Example' }, markdown: '# Saved', category: 'Coding', previousPath: '/tmp/old.md' }); assert.equal(result.ok, true); assert.equal(result.path, '/tmp/saved.md'); assert.equal(worker.fetchCalls.length, 2);
 }
 
-async function testDirectKeyLookupSupportsCallbackOnlyStorage() {
-  const worker = createServiceWorker({
-    directKey: 'sk-test-storage-key',
-    storageCallbackOnly: true,
-    nativeHandler: async () => {
-      throw new Error('Native host unavailable');
-    },
-    fetchHandler: async () => ({
-      ok: true,
-      json: async () => ({
-        choices: [{ message: { content: '# Callback Storage Summary' } }],
-      }),
-    }),
-  });
+async function testLocalServiceHttpErrorsBecomeMessageErrors() { const worker = createServiceWorker({ fetchHandler: async () => jsonResponse({ error: 'local service unavailable' }, false, 503) }); const result = await worker.send({ type: 'FIND_EXISTING_SUMMARY', videoId: 'abc123' }); assert.equal(result.ok, false); assert.equal(result.error, 'local service unavailable'); }
 
-  const result = await worker.send({
-    type: 'SUMMARIZE_AND_SAVE',
-    video: {
-      videoId: 'abc123',
-      title: 'Example',
-      url: 'https://www.youtube.com/watch?v=abc123',
-      transcript: 'Long transcript '.repeat(20),
-    },
-    model: 'mistralai/mistral-small-24b-instruct-2501',
-  });
-  assert.equal(result.ok, true);
-  assert.equal(result.markdown, '# Callback Storage Summary');
-  assert.equal(result.saveMode, 'browser-direct');
+async function testLocalServiceNetworkErrorsBecomeUnavailableMessage() { const worker = createServiceWorker({ fetchHandler: async () => { throw new Error('connect ECONNREFUSED 127.0.0.1:4789'); } }); const result = await worker.send({ type: 'FIND_EXISTING_SUMMARY', videoId: 'abc123' }); assert.equal(result.ok, false); assert.match(result.error, /^local-service-unavailable:/); }
+
+async function testMutatingLocalAuthErrorsBecomeClearMessage() { let authBootstraps = 0; let jobAttempts = 0; const worker = createServiceWorker({ fetchHandler: async (url) => { if (url.endsWith('/api/youtube-summary/extension-auth')) { authBootstraps += 1; return jsonResponse({ ok: true, headerName: 'X-YouTube-Summary-Token', token: 'test-local-token' }); } if (url.endsWith('/api/youtube-summary/jobs')) { jobAttempts += 1; return jsonResponse({ ok: false, code: 'local-auth-error' }, false, 401); } throw new Error('unexpected fetch ' + url); } }); const result = await worker.send({ type: 'SUMMARIZE_AND_SAVE', video: { videoId: 'abc123', title: 'Example', transcript: 'Long transcript '.repeat(20) } }); assert.equal(result.ok, false); assert.match(result.error, /^local-auth-error:/); assert.doesNotMatch(result.error, /macos-multitool/); assert.equal(authBootstraps, 2); assert.equal(jobAttempts, 2); }
+
+async function testMutatingRequestRetriesOnceAfterStaleLocalAuth() { let jobAttempts = 0; const worker = createServiceWorker({ initialStorage: { localYouTubeSummaryToken: 'stale-token' }, fetchHandler: async (url, options = {}) => { if (url.endsWith('/api/youtube-summary/extension-auth')) return jsonResponse({ ok: true, headerName: 'X-YouTube-Summary-Token', token: 'test-local-token' }); if (url.endsWith('/api/youtube-summary/jobs')) { jobAttempts += 1; assert.equal(options.method, 'POST'); assert.equal(options.headers['X-YouTube-Summary-Token'], jobAttempts === 1 ? 'stale-token' : 'test-local-token'); if (jobAttempts === 1) return jsonResponse({ ok: false, code: 'local-auth-error', error: 'local-auth-error: stale token' }, false, 401); return jsonResponse({ ok: true, id: 'job-retry', status: 'queued' }, true, 202); } if (url.endsWith('/api/youtube-summary/jobs/job-retry')) return jsonResponse({ ok: true, id: 'job-retry', status: 'succeeded', result: { ok: true, markdown: '# Retried', path: '/tmp/retried.md' } }); throw new Error('unexpected fetch ' + url); } }); const result = await worker.send({ type: 'SUMMARIZE_AND_SAVE', video: { videoId: 'abc123', title: 'Example', transcript: 'Long transcript '.repeat(20) } }); assert.equal(result.ok, true); assert.equal(result.markdown, '# Retried'); assert.equal(jobAttempts, 2); assert.deepEqual(worker.fetchCalls.map(([url]) => new URL(url).pathname), ['/api/youtube-summary/jobs', '/api/youtube-summary/extension-auth', '/api/youtube-summary/jobs', '/api/youtube-summary/jobs/job-retry']); }
+
+async function testLegacyAuthEndpointStillWorksForOldLocalServices() { const worker = createServiceWorker({ fetchHandler: async (url, options = {}) => { if (url.endsWith('/api/youtube-summary/extension-auth')) return jsonResponse({ error: 'not found' }, false, 404); if (url.endsWith('/api/youtube-summary/auth')) { assert.equal(options.method, 'GET'); return jsonResponse({ ok: true, headerName: 'X-YouTube-Summary-Token', token: 'test-local-token' }); } if (url.endsWith('/api/youtube-summary/jobs')) { assertLocalAuthHeader(options); return jsonResponse({ ok: true, id: 'job-legacy', status: 'queued' }, true, 202); } if (url.endsWith('/api/youtube-summary/jobs/job-legacy')) return jsonResponse({ ok: true, id: 'job-legacy', status: 'succeeded', result: { ok: true, markdown: '# Legacy', path: '/tmp/legacy.md' } }); throw new Error('unexpected fetch ' + url); } }); const result = await worker.send({ type: 'SUMMARIZE_AND_SAVE', video: { videoId: 'abc123', title: 'Example', transcript: 'Long transcript '.repeat(20) } }); assert.equal(result.ok, true); assert.equal(result.markdown, '# Legacy'); }
+
+async function testActionClickInjectsYoutubeContentScriptWhenMissing() {
+  const worker = createServiceWorker({ activeTab: { id: 42, url: 'https://www.youtube.com/watch?v=abc123' }, firstTabMessageRejects: true, fetchHandler: async () => { throw new Error('fetch not expected for action click'); } });
+  await worker.clickAction(); assert.equal(worker.tabMessageCount, 2); assert.equal(JSON.stringify(worker.executedScripts), JSON.stringify([{ target: { tabId: 42 }, files: ['content/youtube-transcript.js'] }]));
 }
 
-async function testDirectKeyLookupSupportsLocalSecretsGlobal() {
-  const worker = createServiceWorker({
-    localGlobalKey: 'sk-test-local-secret',
-    nativeHandler: async () => {
-      throw new Error('Native host unavailable');
-    },
-    fetchHandler: async (_url, options) => {
-      assert.equal(options.headers.Authorization, 'Bearer sk-test-local-secret');
-      return {
-        ok: true,
-        json: async () => ({
-          choices: [{ message: { content: '# Local Secret Summary' } }],
-        }),
-      };
-    },
-  });
+function testContentTimeoutExceedsBackgroundLocalJobTimeout() { const summaryTimeout = Number(contentScriptSource.match(/SUMMARY_RESPONSE_TIMEOUT_MS\s*=\s*(\d+)/)?.[1] || 0); const localJobTimeout = Number(scriptSource.match(/LOCAL_SUMMARY_JOB_TIMEOUT_MS\s*=\s*(\d+)/)?.[1] || 0); assert.ok(summaryTimeout >= localJobTimeout + 30000, 'content timeout ' + summaryTimeout + 'ms must leave room for local job timeout ' + localJobTimeout + 'ms plus extraction/overhead'); }
 
-  const result = await worker.send({
-    type: 'SUMMARIZE_AND_SAVE',
-    video: {
-      videoId: 'abc123',
-      title: 'Example',
-      url: 'https://www.youtube.com/watch?v=abc123',
-      transcript: 'Long transcript '.repeat(20),
-    },
-    model: 'mistralai/mistral-small-24b-instruct-2501',
-  });
-  assert.equal(result.ok, true);
-  assert.equal(result.markdown, '# Local Secret Summary');
-  assert.equal(result.saveMode, 'browser-direct');
-}
-
-async function testBrowserPromiseModeReturnsMessageResponse() {
-  const worker = createServiceWorker({
-    browserPromiseMode: true,
-    nativeHandler: async (message) => ({
-      ok: true,
-      markdown: `# ${message.type}`,
-      path: '/tmp/native.md',
-      category: 'General',
-    }),
-  });
-
-  const result = await worker.sendAsPromise({
-    type: 'SUMMARIZE_AND_SAVE',
-    video: { videoId: 'abc123', title: 'Example', transcript: 'Long transcript '.repeat(20) },
-    model: 'mistralai/mistral-small-24b-instruct-2501',
-  });
-  assert.equal(result.ok, true);
-  assert.equal(result.markdown, '# summarizeAndSave');
-}
-
-async function testBrowserPromiseModeAlsoCallsSendResponse() {
-  const worker = createServiceWorker({
-    browserPromiseMode: true,
-    nativeHandler: async (message) => ({
-      ok: true,
-      markdown: `# ${message.type}`,
-      path: '/tmp/native.md',
-      category: 'General',
-    }),
-  });
-
-  const result = await worker.sendWithCallbackInBrowserMode({
-    type: 'SUMMARIZE_AND_SAVE',
-    video: { videoId: 'abc123', title: 'Example', transcript: 'Long transcript '.repeat(20) },
-    model: 'mistralai/mistral-small-24b-instruct-2501',
-  });
-  assert.equal(result.ok, true);
-  assert.equal(result.markdown, '# summarizeAndSave');
-}
-
-(async () => {
-  await testSummarizePrefersReachableNativeHostEvenWithDirectKey();
-  await testSummarizeFallsBackToDirectWhenNativeUnavailable();
-  await testFindExistingPrefersReachableNativeHost();
-  await testSaveMarkdownPrefersReachableNativeHost();
-  await testFindExistingFallsBackWhenNativeUnavailable();
-  await testDirectKeyLookupSupportsCallbackOnlyStorage();
-  await testDirectKeyLookupSupportsLocalSecretsGlobal();
-  await testBrowserPromiseModeReturnsMessageResponse();
-  await testBrowserPromiseModeAlsoCallsSendResponse();
-  console.log('service-worker-contract.test.js passed');
-})().catch((error) => {
-  console.error(error);
-  process.exit(1);
-});
+(async () => { await testSummarizeRoutesThroughLocalJobApi(); await testLocalAuthBootstrapUsesAllowlistedIdWhenRuntimeIdIsMissingOrSafariScoped(); await testSummarizeReturnsFailedLocalJobAsMessageResponse(); await testFindExistingRoutesThroughLocalService(); await testSaveMarkdownRoutesThroughLocalService(); await testLocalServiceHttpErrorsBecomeMessageErrors(); await testLocalServiceNetworkErrorsBecomeUnavailableMessage(); await testMutatingLocalAuthErrorsBecomeClearMessage(); await testMutatingRequestRetriesOnceAfterStaleLocalAuth(); await testLegacyAuthEndpointStillWorksForOldLocalServices(); await testActionClickInjectsYoutubeContentScriptWhenMissing(); testContentTimeoutExceedsBackgroundLocalJobTimeout(); console.log('service-worker-contract.test.js passed'); })().catch((error) => { console.error(error); process.exit(1); });

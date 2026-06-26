@@ -6,7 +6,6 @@
   "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAxzkQO5C3BFa7jmTeanuxDlqSKivpRS+Ioj6kfppGtRM8UM5ERPR+AqdII4PnNMhu47vfsMjCuGLinq1hWajSDcZk3wTyCGYbLhfYHaHr7kMMsJmc5tY+D+vK3e7o8N265Mtpg38fAKZoWdMBgvfx2d0uC8sla8Qu0MST44B3R7TsEjH9Zc8ptXAbD9eEgslnnZ28vT7I0aT5BqnqGmMPmenvhKUI6OxqkI2TKs20IpSNi+gk4gOmmvFcefbm1Lc2f3f593lfk512jCAPTjySUmpeni9zpibWd6n5KO4pu9P7fG7v3AXw50jdvaLvpcVC7FBgZw4zi02lUUjxDyRb6QIDAQAB",
   "permissions": [
     "activeTab",
-    "nativeMessaging",
     "scripting",
     "storage",
     "tabs"
@@ -19,7 +18,9 @@
     "https://gemini.google.com/*",
     "https://chat.mistral.ai/*",
     "https://grok.com/*",
-    "https://chat.deepseek.com/*"
+    "https://chat.deepseek.com/*",
+    "https://openrouter.ai/*",
+    "http://127.0.0.1:4789/*"
   ],
   "background": {
     "service_worker": "background/service-worker.js"

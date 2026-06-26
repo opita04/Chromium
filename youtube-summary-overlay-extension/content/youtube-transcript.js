@@ -3,8 +3,9 @@
 
   const DEFAULT_MODEL = 'mistralai/mistral-small-24b-instruct-2501';
   const PREVIOUS_DEFAULT_MODELS = new Set(['nvidia/nemotron-3-ultra-550b-a55b:free']);
-  const SUMMARY_RESPONSE_TIMEOUT_MS = 50000;
+  const SUMMARY_RESPONSE_TIMEOUT_MS = 180000;
   const EXISTING_SUMMARY_LOOKUP_TIMEOUT_MS = 8000;
+  const SAVE_MARKDOWN_TIMEOUT_MS = 60000;
   const STORAGE_OPERATION_TIMEOUT_MS = 1500;
   const CATEGORIES = ['Political', 'Coding', 'Educational', 'General', 'Business', 'AI', 'Finance', 'Health', 'Science', 'Others'];
   const MODEL_PRESETS = [
@@ -70,6 +71,9 @@
     category: 'General',
     model: DEFAULT_MODEL,
     busy: false,
+    saveMode: '',
+    nativeSaveUnavailable: false,
+    nativeError: '',
   };
 
   function effectiveModel(model) {
@@ -474,7 +478,7 @@
   }
 
   function storageLocal() {
-    return globalThis.chrome?.storage?.local || null;
+    return globalThis.chrome?.storage?.local || globalThis.browser?.storage?.local || null;
   }
 
   function storageGet(storage, key, timeoutMs = STORAGE_OPERATION_TIMEOUT_MS) {
@@ -575,6 +579,9 @@
       category: result.category || 'General',
       model: result.model || DEFAULT_MODEL,
       busy: false,
+      saveMode: result.saveMode || '',
+      nativeSaveUnavailable: Boolean(result.nativeSaveUnavailable),
+      nativeError: result.nativeError || '',
     };
     try {
       await writeCachedSummary(state);
@@ -619,34 +626,42 @@
         finish({ ok: false, error: `No extension response after ${Math.round(timeoutMs / 1000)}s.` });
       }, timeoutMs) : null;
 
-      try {
-        if (globalThis.browser?.runtime?.sendMessage) {
-          globalThis.browser.runtime.sendMessage(message).then(
-            (response) => finish(response),
-            (error) => finish({ ok: false, error: error?.message || String(error) })
-          );
-          return;
+      let retries = 0;
+      const attemptSend = () => {
+        try {
+          // Safari's browser.runtime Promise path can hang without resolving or
+          // rejecting in temporary WebExtensions. Use the Chrome-style callback
+          // path exclusively; Safari supports it and it gives us lastError.
+          chrome.runtime.sendMessage(message, (response) => {
+            if (settled) return;
+            const lastError = chrome.runtime.lastError || globalThis.browser?.runtime?.lastError;
+            if (lastError) {
+              // Sometimes Safari still fails during wake-up with an error, retry if possible
+              if (retries < 2 && lastError.message?.includes('Receiving end does not exist')) {
+                retries++;
+                setTimeout(attemptSend, 150);
+                return;
+              }
+              finish({ ok: false, error: lastError.message });
+              return;
+            }
+            if (response !== undefined) {
+              finish(response);
+              return;
+            }
+            // Safari drops messages when waking up dormant service workers.
+            if (retries < 2) {
+              retries++;
+              setTimeout(attemptSend, 150);
+              return;
+            }
+            finish({ ok: false, error: 'No response.' });
+          });
+        } catch (error) {
+          finish({ ok: false, error: error?.message || String(error) });
         }
-
-        chrome.runtime.sendMessage(message, (response) => {
-          if (settled) return;
-          if (chrome.runtime.lastError) {
-            finish({ ok: false, error: chrome.runtime.lastError.message });
-            return;
-          }
-          if (response !== undefined) {
-            finish(response);
-            return;
-          }
-          if (!timeout) {
-            setTimeout(() => {
-              if (!settled) finish({ ok: false, error: 'No response.' });
-            }, 250);
-          }
-        });
-      } catch (error) {
-        finish({ ok: false, error: error?.message || String(error) });
-      }
+      };
+      attemptSend();
     });
   }
 
@@ -987,6 +1002,20 @@
     moveButton.addEventListener('click', moveToSelectedCategory);
     row.appendChild(moveButton);
 
+    const copyButton = document.createElement('button');
+    copyButton.type = 'button';
+    copyButton.className = 'secondary';
+    copyButton.textContent = 'Copy Markdown';
+    copyButton.addEventListener('click', copyMarkdownToClipboard);
+    row.appendChild(copyButton);
+
+    const downloadButton = document.createElement('button');
+    downloadButton.type = 'button';
+    downloadButton.className = 'secondary';
+    downloadButton.textContent = 'Download .md';
+    downloadButton.addEventListener('click', downloadMarkdown);
+    row.appendChild(downloadButton);
+
     const aiLabel = document.createElement('label');
     aiLabel.textContent = 'Send transcript to';
     const aiSelect = document.createElement('select');
@@ -1168,9 +1197,21 @@
     });
     if (category) category.value = CATEGORIES.includes(state.category) ? state.category : 'General';
     if (summary) renderMarkdown(state.markdown || '', summary);
-    if (pathLine) pathLine.textContent = state.path ? `Saved: ${state.path}` : '';
+    if (pathLine) {
+      if (state.path) {
+        pathLine.textContent = `Saved: ${state.path}`;
+      } else if (state.nativeSaveUnavailable) {
+        pathLine.textContent = 'Browser-direct mode: summary is not saved to Obsidian. Use Copy Markdown or Download .md.';
+      } else {
+        pathLine.textContent = '';
+      }
+    }
     if (state.markdown) {
-      setStatus(fromCache ? `Loaded saved summary. Redo summary uses ${effectiveModel(state.model)}.` : `Done. Category: ${state.category}`);
+      if (state.nativeSaveUnavailable) {
+        setStatus('Summary ready. Safari/browser-direct cannot write to Obsidian; use Copy Markdown or Download .md.');
+      } else {
+        setStatus(fromCache ? `Loaded saved summary. Redo summary uses ${effectiveModel(state.model)}.` : `Done. Category: ${state.category}`);
+      }
       setActionButton('Open Summary', 'is-done');
     }
   }
@@ -1218,7 +1259,7 @@
           return;
         }
 
-        state = { ...state, video: null, markdown: '', path: '', category: 'General', busy: false };
+        state = { ...state, video: null, markdown: '', path: '', category: 'General', busy: false, saveMode: '', nativeSaveUnavailable: false, nativeError: '' };
         await runSummary({ force: true, model: effectiveModel(state.model), openWhenReady: true, launchContext });
       } finally {
         finishLaunch(launchContext);
@@ -1291,6 +1332,9 @@
         category: result.category || 'General',
         model: result.model || selectedModel,
         busy: false,
+        saveMode: result.saveMode || '',
+        nativeSaveUnavailable: Boolean(result.nativeSaveUnavailable),
+        nativeError: result.nativeError || '',
       };
       let cacheWarning = '';
       try {
@@ -1315,11 +1359,81 @@
     }
   }
 
+  function suggestedMarkdownFilename() {
+    const rawTitle = state.video?.title || 'youtube-summary';
+    const title = rawTitle
+      .normalize('NFKD')
+      .replace(/[\/:*?"<>|]+/g, '-')
+      .replace(/\s+/g, ' ')
+      .trim()
+      .slice(0, 120) || 'youtube-summary';
+    return `${title}.md`;
+  }
+
+  async function copyMarkdownToClipboard() {
+    if (!state.markdown || state.busy) return;
+    try {
+      if (navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(state.markdown);
+      } else {
+        const textarea = document.createElement('textarea');
+        textarea.value = state.markdown;
+        textarea.setAttribute('readonly', '');
+        textarea.style.position = 'fixed';
+        textarea.style.opacity = '0';
+        document.body.appendChild(textarea);
+        textarea.select();
+        document.execCommand('copy');
+        textarea.remove();
+      }
+      setStatus('Copied Markdown to clipboard. Paste it into Obsidian.');
+    } catch (error) {
+      setStatus(`Copy failed: ${error.message}`);
+    }
+  }
+
+  function downloadMarkdown() {
+    if (!state.markdown || state.busy) return;
+    try {
+      const blob = new Blob([state.markdown], { type: 'text/markdown;charset=utf-8' });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = suggestedMarkdownFilename();
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
+      setStatus('Downloaded Markdown file. Move it into your Obsidian vault if needed.');
+    } catch (error) {
+      setStatus(`Download failed: ${error.message}`);
+    }
+  }
+
   async function moveToSelectedCategory() {
     if (!state.markdown || !state.video || state.busy) return;
     const category = overlayPart('category')?.value || state.category || 'General';
     const markdown = state.markdown;
+    if (state.nativeSaveUnavailable || state.saveMode === 'browser-direct') {
+      state = { ...state, category, busy: false };
+      try {
+        await writeCachedSummary(state);
+      } catch (error) {
+        console.warn('Could not cache browser-direct category change:', error);
+      }
+      renderState(false);
+      setStatus(`Category changed locally to ${category}. Safari/browser-direct cannot move files in Obsidian; use Copy Markdown or Download .md.`);
+      return;
+    }
     setBusy(true, `Moving note to ${category}/…`);
+    const waitTimers = [
+      setTimeout(() => {
+        if (state.busy) setStatus(`Still waiting for Obsidian/native save to move note to ${category}/…`);
+      }, 8000),
+      setTimeout(() => {
+        if (state.busy) setStatus('Native save is still not responding. This will time out instead of staying stuck.');
+      }, 25000),
+    ];
     try {
       const result = await sendMessage({
         type: 'SAVE_MARKDOWN',
@@ -1327,7 +1441,7 @@
         markdown,
         category,
         previousPath: state.path,
-      });
+      }, SAVE_MARKDOWN_TIMEOUT_MS);
       if (!result.ok) throw new Error(result.error || 'Save failed.');
       state = {
         ...state,
@@ -1343,6 +1457,7 @@
     } catch (error) {
       setStatus(`Error: ${error.message}`);
     } finally {
+      waitTimers.forEach((timer) => clearTimeout(timer));
       setBusy(false);
     }
   }
@@ -1407,7 +1522,7 @@
       if (videoId !== lastObservedVideoId) {
         lastObservedVideoId = videoId;
         invalidateLaunches();
-        state = { ...state, video: null, markdown: '', path: '', category: 'General', busy: false };
+        state = { ...state, video: null, markdown: '', path: '', category: 'General', busy: false, saveMode: '', nativeSaveUnavailable: false, nativeError: '' };
         document.getElementById(OVERLAY_ID)?.remove();
       }
       ensureActionButton();

@@ -2,18 +2,20 @@ const HOST_NAME = 'com.opita.youtube_summary_sidepanel';
 const DEFAULT_MODEL = 'mistralai/mistral-small-24b-instruct-2501';
 const PREVIOUS_DEFAULT_MODELS = new Set(['nvidia/nemotron-3-ultra-550b-a55b:free']);
 const NATIVE_MESSAGE_TIMEOUT_MS = 45000;
-const OPENROUTER_TIMEOUT_MS = 45000;
+const OPENROUTER_TIMEOUT_MS = 120000;
 const OPENROUTER_MAX_TOKENS = 2600;
 const STORAGE_OPERATION_TIMEOUT_MS = 1500;
 const OPENROUTER_API_KEY_STORAGE_KEYS = ['openRouterApiKey', 'OPENROUTER_API_KEY'];
+const LOCAL_SUMMARY_SERVICE_BASE_URL = 'http://127.0.0.1:4789';
+const LOCAL_SUMMARY_JOB_TIMEOUT_MS = 150000;
+const LOCAL_SUMMARY_POLL_INTERVAL_MS = 1000;
+const LOCAL_SUMMARY_AUTH_STORAGE_KEY = 'localYouTubeSummaryToken';
+const LOCAL_SUMMARY_AUTH_HEADER_FALLBACK = 'X-YouTube-Summary-Token';
+const LOCAL_SUMMARY_EXTENSION_ID_HEADER = 'X-YouTube-Summary-Extension-Id';
+const LOCAL_SUMMARY_ALLOWED_EXTENSION_ID = 'lbbncpgjnoffnhihjnomphmabaieaaoo';
 
-try {
-  if (typeof importScripts === 'function') {
-    importScripts('local-secrets.js');
-  }
-} catch {
-  // Optional local-only key file. Never required and never committed.
-}
+// Credentials and summarization now live in the local macos-multitool service.
+// Keep this service worker transport-only for Safari/Chrome-safe localhost routing.
 
 const AI_PLATFORMS = [
   { id: 'chatgpt', name: 'ChatGPT', url: 'https://chatgpt.com/?model=gpt-4o-mini&quicktube' },
@@ -58,6 +60,29 @@ function storageGet(storage, key, timeoutMs = STORAGE_OPERATION_TIMEOUT_MS) {
   });
 }
 
+async function storageSet(storage, values, timeoutMs = STORAGE_OPERATION_TIMEOUT_MS) {
+  return new Promise((resolve) => {
+    if (!storage?.set) {
+      resolve(false);
+      return;
+    }
+    let settled = false;
+    const finish = (value) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      resolve(value);
+    };
+    const timer = setTimeout(() => finish(false), timeoutMs);
+    try {
+      const maybePromise = storage.set(values, () => finish(!chrome.runtime?.lastError));
+      if (maybePromise?.then) maybePromise.then(() => finish(true), () => finish(false));
+    } catch {
+      finish(false);
+    }
+  });
+}
+
 async function getDirectOpenRouterApiKey() {
   if (typeof OPENROUTER_API_KEY === 'string' && OPENROUTER_API_KEY.trim().startsWith('sk-')) {
     return OPENROUTER_API_KEY.trim();
@@ -78,6 +103,13 @@ async function getDirectOpenRouterApiKey() {
 
 async function hasDirectOpenRouterKey() {
   return Boolean(await getDirectOpenRouterApiKey());
+}
+
+function prefersBrowserDirectMode() {
+  // Native messaging should be attempted first whenever the runtime exposes it.
+  // Safari bridge builds can provide chrome.runtime.sendNativeMessage too; do not
+  // force every Safari/WebExtensions runtime into summarize-only browser-direct mode.
+  return typeof chrome?.runtime?.sendNativeMessage !== 'function';
 }
 
 function redactUrlForExternal(input) {
@@ -111,12 +143,20 @@ function sendNativeMessage(message) {
       reject(new Error(`Native host timed out after ${NATIVE_MESSAGE_TIMEOUT_MS / 1000}s.`));
     }, NATIVE_MESSAGE_TIMEOUT_MS);
 
+    if (typeof chrome.runtime?.sendNativeMessage !== 'function') {
+      settled = true;
+      clearTimeout(timeout);
+      reject(new Error('Native messaging is not supported in this browser.'));
+      return;
+    }
+
     chrome.runtime.sendNativeMessage(HOST_NAME, message, (response) => {
       if (settled) return;
       settled = true;
       clearTimeout(timeout);
-      if (chrome.runtime.lastError) {
-        reject(new Error(chrome.runtime.lastError.message));
+      const lastError = chrome.runtime.lastError || globalThis.browser?.runtime?.lastError;
+      if (lastError) {
+        reject(new Error(lastError.message));
         return;
       }
       if (!response) {
@@ -332,69 +372,182 @@ async function summarizeDirect({ video, model }) {
   };
 }
 
-async function summarizeBestAvailable({ video, model }) {
+function localServiceUnavailableMessage(error) {
+  const detail = error?.name === 'AbortError' ? 'request timed out' : (error?.message || String(error || 'request failed'));
+  return `local-service-unavailable: Could not reach the local YouTube Summary service at ${LOCAL_SUMMARY_SERVICE_BASE_URL} (${detail}).`;
+}
+
+function localAuthErrorMessage(detail = 'token is missing or invalid') {
+  return `local-auth-error: YouTube Summary local auth ${detail}. Local authorization could not be refreshed automatically; retry after the local service is available.`;
+}
+
+async function fetchLocalSummaryAuthConfig(timeoutMs = 15000) {
+  const runtimeId = String(globalThis.chrome?.runtime?.id || globalThis.browser?.runtime?.id || LOCAL_SUMMARY_ALLOWED_EXTENSION_ID).trim();
+  const extensionId = /^[a-p]{32}$/i.test(runtimeId) ? runtimeId : LOCAL_SUMMARY_ALLOWED_EXTENSION_ID;
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
+  let response;
+  let data;
   try {
-    return await sendNativeMessage({ type: 'summarizeAndSave', video, model: effectiveModel(model) });
-  } catch (nativeError) {
-    if (await hasDirectOpenRouterKey()) {
-      try {
-        const result = await summarizeDirect({ video, model });
-        return {
-          ...result,
-          nativeSaveUnavailable: true,
-          nativeError: nativeError.message,
-        };
-      } catch (directError) {
-        throw new Error(`Native host unavailable (${nativeError.message}); browser-direct fallback failed: ${directError.message}`);
-      }
-    }
-    throw nativeError;
+    response = await fetch(`${LOCAL_SUMMARY_SERVICE_BASE_URL}/api/youtube-summary/extension-auth`, {
+      method: 'GET',
+      signal: controller.signal,
+      headers: {
+        'Cache-Control': 'no-store',
+        [LOCAL_SUMMARY_EXTENSION_ID_HEADER]: extensionId,
+      },
+    });
+    data = await response.json().catch(() => ({}));
+  } catch (error) {
+    throw new Error(localServiceUnavailableMessage(error));
+  } finally {
+    clearTimeout(timeout);
   }
+  if (response.status === 404) return fetchLegacyLocalSummaryAuthConfig(timeoutMs);
+  if (!response.ok) throw new Error(response.status === 401 || response.status === 403 ? localAuthErrorMessage(data?.error || 'extension is not authorized') : (data?.error || `Local YouTube Summary service HTTP ${response.status}`));
+  if (!data?.token) throw new Error(localAuthErrorMessage('bootstrap token was not available'));
+  return { token: String(data.token), headerName: String(data.headerName || LOCAL_SUMMARY_AUTH_HEADER_FALLBACK) };
+}
+
+async function fetchLegacyLocalSummaryAuthConfig(timeoutMs = 15000) {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
+  let response;
+  let data;
+  try {
+    response = await fetch(`${LOCAL_SUMMARY_SERVICE_BASE_URL}/api/youtube-summary/auth`, {
+      method: 'GET',
+      signal: controller.signal,
+      headers: { 'Cache-Control': 'no-store' },
+    });
+    data = await response.json().catch(() => ({}));
+  } catch (error) {
+    throw new Error(localServiceUnavailableMessage(error));
+  } finally {
+    clearTimeout(timeout);
+  }
+  if (!response.ok) throw new Error(response.status === 401 || response.status === 403 ? localAuthErrorMessage() : (data?.error || `Local YouTube Summary service HTTP ${response.status}`));
+  if (!data?.token) throw new Error(localAuthErrorMessage('bootstrap token was not available'));
+  return { token: String(data.token), headerName: String(data.headerName || LOCAL_SUMMARY_AUTH_HEADER_FALLBACK) };
+}
+
+async function getLocalSummaryAuthHeaders() {
+  const storage = globalThis.chrome?.storage?.local;
+  const cached = await storageGet(storage, LOCAL_SUMMARY_AUTH_STORAGE_KEY).catch(() => ({}));
+  const cachedToken = String(cached?.[LOCAL_SUMMARY_AUTH_STORAGE_KEY] || '').trim();
+  if (cachedToken) return { [LOCAL_SUMMARY_AUTH_HEADER_FALLBACK]: cachedToken };
+  const config = await fetchLocalSummaryAuthConfig();
+  await storageSet(storage, { [LOCAL_SUMMARY_AUTH_STORAGE_KEY]: config.token });
+  return { [config.headerName || LOCAL_SUMMARY_AUTH_HEADER_FALLBACK]: config.token };
+}
+
+async function clearLocalSummaryAuth() {
+  const storage = globalThis.chrome?.storage?.local;
+  await storageSet(storage, { [LOCAL_SUMMARY_AUTH_STORAGE_KEY]: '' }).catch(() => false);
+}
+
+function isLocalSummaryAuthFailure(response, data) {
+  return response?.status === 401 || response?.status === 403 || data?.code === 'local-auth-error';
+}
+
+async function fetchLocalSummaryJsonOnce(path, options = {}) {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), options.timeoutMs || 15000);
+  let response;
+  let data;
+  try {
+    const authHeaders = options.auth ? await getLocalSummaryAuthHeaders() : {};
+    response = await fetch(`${LOCAL_SUMMARY_SERVICE_BASE_URL}${path}`, {
+      method: options.method || 'GET',
+      signal: controller.signal,
+      headers: {
+        ...(options.body ? { 'Content-Type': 'application/json' } : {}),
+        ...authHeaders,
+      },
+      body: options.body ? JSON.stringify(options.body) : undefined,
+    });
+    data = await response.json().catch(() => ({}));
+  } catch (error) {
+    if (/^local-(?:service-unavailable|auth-error):/.test(error?.message || '')) throw error;
+    throw new Error(localServiceUnavailableMessage(error));
+  } finally {
+    clearTimeout(timeout);
+  }
+  if (!response.ok) {
+    if (isLocalSummaryAuthFailure(response, data)) throw new Error(data?.error || localAuthErrorMessage());
+    throw new Error(data?.error || `Local YouTube Summary service HTTP ${response.status}`);
+  }
+  if (data?.code === 'local-auth-error') throw new Error(data?.error || localAuthErrorMessage());
+  return data;
+}
+
+async function fetchLocalSummaryJson(path, options = {}) {
+  const method = String(options.method || 'GET').toUpperCase();
+  const shouldRetryStaleAuth = Boolean(options.auth && method !== 'GET');
+  try {
+    return await fetchLocalSummaryJsonOnce(path, options);
+  } catch (error) {
+    if (!shouldRetryStaleAuth || !/^local-auth-error:/.test(error?.message || '')) throw error;
+  }
+  await clearLocalSummaryAuth();
+  return fetchLocalSummaryJsonOnce(path, options);
+}
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function pollLocalSummaryJob(jobId) {
+  const deadline = Date.now() + LOCAL_SUMMARY_JOB_TIMEOUT_MS;
+  while (Date.now() < deadline) {
+    const job = await fetchLocalSummaryJson(`/api/youtube-summary/jobs/${encodeURIComponent(jobId)}`, { timeoutMs: 15000 });
+    if (job.status === 'succeeded') return job.result || { ok: false, error: 'Local YouTube Summary job completed without a result.' };
+    if (job.status === 'failed') return { ok: false, error: job.error || 'Local YouTube Summary job failed.' };
+    await sleep(LOCAL_SUMMARY_POLL_INTERVAL_MS);
+  }
+  return { ok: false, error: `Local YouTube Summary service timed out after ${LOCAL_SUMMARY_JOB_TIMEOUT_MS / 1000}s.` };
+}
+
+async function summarizeBestAvailable({ video, model }) {
+  const created = await fetchLocalSummaryJson('/api/youtube-summary/jobs', {
+    method: 'POST',
+    body: { video, model: effectiveModel(model) },
+    timeoutMs: 15000,
+    auth: true,
+  });
+  if (!created?.id) return { ok: false, error: 'Local YouTube Summary service did not return a job id.' };
+  return pollLocalSummaryJob(created.id);
 }
 
 async function findExistingSummaryBestAvailable({ videoId }) {
-  try {
-    return await sendNativeMessage({ type: 'findExistingSummary', videoId });
-  } catch (error) {
-    if (await hasDirectOpenRouterKey()) {
-      return {
-        ok: true,
-        found: false,
-        saveMode: 'browser-direct',
-        nativeLookupUnavailable: true,
-        nativeError: error.message,
-      };
-    }
-    throw error;
-  }
+  return fetchLocalSummaryJson(`/api/youtube-summary/existing?videoId=${encodeURIComponent(videoId || '')}`, { timeoutMs: 15000 });
 }
 
 async function saveMarkdownBestAvailable({ markdown, video, category, previousPath }) {
-  try {
-    return await sendNativeMessage({
-      type: 'saveMarkdown',
-      markdown,
-      video,
-      category,
-      previousPath,
-    });
-  } catch (error) {
-    if (await hasDirectOpenRouterKey()) {
-      return {
-        ok: false,
-        error: `Browser-direct mode can summarize, but cannot write directly to Obsidian. Use Brave/Chrome native host for exact-folder save, or copy/download the Markdown from the overlay. Native save unavailable: ${error.message}`,
-      };
-    }
-    throw error;
-  }
+  return fetchLocalSummaryJson('/api/youtube-summary/save', {
+    method: 'POST',
+    body: { markdown, video, category, previousPath },
+    timeoutMs: 30000,
+    auth: true,
+  });
 }
+
 
 async function openOverlayInTab(tab) {
   if (!tab?.id) throw new Error('No active tab.');
   if (!/^https:\/\/www\.youtube\.com\/watch\b/.test(tab.url || '')) {
     throw new Error('Open a YouTube watch page first.');
   }
-  return chrome.tabs.sendMessage(tab.id, { type: 'OPEN_SUMMARY_OVERLAY' });
+
+  try {
+    return await chrome.tabs.sendMessage(tab.id, { type: 'OPEN_SUMMARY_OVERLAY' });
+  } catch (error) {
+    await chrome.scripting.executeScript({
+      target: { tabId: tab.id },
+      files: ['content/youtube-transcript.js'],
+    });
+    return chrome.tabs.sendMessage(tab.id, { type: 'OPEN_SUMMARY_OVERLAY' });
+  }
 }
 
 function isWebPageUrl(url) {
@@ -495,6 +648,5 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     .catch((error) => ({ ok: false, error: error?.message || String(error) }));
 
   responsePromise.then(sendResponse);
-  if (globalThis.browser?.runtime?.onMessage) return responsePromise;
   return true;
 });
