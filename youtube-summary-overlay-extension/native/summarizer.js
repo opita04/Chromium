@@ -10,6 +10,9 @@ const PREVIOUS_DEFAULT_MODELS = new Set(['nvidia/nemotron-3-ultra-550b-a55b:free
 const FALLBACK_SOURCE_MODELS = new Set(['openrouter/free', 'nvidia/nemotron-3-ultra-550b-a55b:free']);
 const OPENROUTER_TIMEOUT_MS = Number.parseInt(process.env.OPENROUTER_TIMEOUT_MS || '120000', 10);
 const OPENROUTER_MAX_TOKENS = Number.parseInt(process.env.OPENROUTER_MAX_TOKENS || '2600', 10);
+const YTDLP_TRANSCRIPT_TIMEOUT_MS = Number.parseInt(process.env.YTDLP_TRANSCRIPT_TIMEOUT_MS || '90000', 10);
+const YTDLP_TRANSCRIPT_LANGS = process.env.YTDLP_TRANSCRIPT_LANGS || 'en,en-orig,en-en,en-US,en-GB';
+const YTDLP_TRANSCRIPT_FORMAT = process.env.YTDLP_TRANSCRIPT_FORMAT || 'json3';
 const DEFAULT_OUTPUT_DIR = '/Users/opita/Documents/Obsidian/youtube-summaries';
 const SUMMARY_INDEX_FILE = '.summary-index.json';
 const CATEGORIES = [
@@ -371,6 +374,142 @@ function normalizeSource(video = {}) {
   };
 }
 
+function youtubeVideoUrl({ videoId, url } = {}) {
+  const explicitId = String(videoId || '').trim();
+  if (/^[A-Za-z0-9_-]{6,}$/.test(explicitId)) return `https://www.youtube.com/watch?v=${explicitId}`;
+  try {
+    const parsed = new URL(String(url || '').trim());
+    const fromWatch = parsed.hostname.endsWith('youtube.com') ? parsed.searchParams.get('v') : '';
+    const fromShort = parsed.hostname === 'youtu.be' ? parsed.pathname.split('/').filter(Boolean)[0] : '';
+    const found = fromWatch || fromShort;
+    if (/^[A-Za-z0-9_-]{6,}$/.test(found || '')) return `https://www.youtube.com/watch?v=${found}`;
+  } catch {}
+  throw new Error('Missing YouTube video id for transcript fallback.');
+}
+
+function cleanTranscriptSegment(value) {
+  return String(value || '')
+    .replace(/\b\d{1,2}:\d{2}(?::\d{2})?\b/g, ' ')
+    .replace(/^\s*(?:(?:\d+|zero|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|thirteen|fourteen|fifteen|sixteen|seventeen|eighteen|nineteen|twenty|thirty|forty|fifty)\s+(?:hours?|minutes?|seconds?)\b[\s,]*(?:and\s*)?)+/i, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function decodeXmlEntities(value) {
+  return String(value || '')
+    .replace(/&amp;/g, '&')
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;|&apos;/g, "'")
+    .replace(/&#(\d+);/g, (_, code) => String.fromCharCode(Number(code)))
+    .replace(/&#x([0-9a-f]+);/gi, (_, code) => String.fromCharCode(Number.parseInt(code, 16)));
+}
+
+function transcriptFromJson3(data) {
+  return (data?.events || [])
+    .map((event) => (event.segs || []).map((seg) => seg.utf8 || '').join(''))
+    .map(cleanTranscriptSegment)
+    .filter(Boolean)
+    .join(' ');
+}
+
+function transcriptFromXml(text) {
+  return Array.from(String(text || '').matchAll(/<text\b[^>]*>([\s\S]*?)<\/text>/gi))
+    .map((match) => cleanTranscriptSegment(decodeXmlEntities(match[1].replace(/<[^>]+>/g, ' '))))
+    .filter(Boolean)
+    .join(' ');
+}
+
+function transcriptFromVtt(text) {
+  return String(text || '')
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter((line) => line && !/^WEBVTT\b/i.test(line))
+    .filter((line) => !/^NOTE\b|^STYLE\b|^REGION\b/i.test(line))
+    .filter((line) => !/^\d+$/.test(line))
+    .filter((line) => !/-->|align:|position:|line:/i.test(line))
+    .map((line) => cleanTranscriptSegment(line.replace(/<[^>]+>/g, ' ')))
+    .filter(Boolean)
+    .join(' ');
+}
+
+function transcriptFromSubtitleText(text) {
+  const trimmed = String(text || '').trim();
+  if (!trimmed) return '';
+  if (trimmed.startsWith('{')) return transcriptFromJson3(JSON.parse(trimmed));
+  if (/^WEBVTT\b/i.test(trimmed) || /-->/m.test(trimmed)) return transcriptFromVtt(trimmed);
+  return transcriptFromXml(trimmed);
+}
+
+function ytdlpCandidates() {
+  return [
+    process.env.YTDLP_BIN,
+    '/Users/opita/.local/bin/yt-dlp',
+    'yt-dlp',
+  ].filter(Boolean).filter((candidate, index, list) => list.indexOf(candidate) === index);
+}
+
+function readSubtitleCandidates(dir) {
+  return fs.readdirSync(dir)
+    .filter((file) => /\.(?:json3|vtt|srv3|xml|ttml|srt)$/i.test(file))
+    .map((file) => {
+      const filePath = path.join(dir, file);
+      try {
+        const transcript = transcriptFromSubtitleText(fs.readFileSync(filePath, 'utf8'));
+        return { file, transcript, chars: transcript.length };
+      } catch (error) {
+        return { file, transcript: '', chars: 0, error: error.message };
+      }
+    })
+    .filter((candidate) => candidate.chars >= 50)
+    .sort((left, right) => right.chars - left.chars);
+}
+
+function fetchTranscript({ videoId, url } = {}) {
+  const watchUrl = youtubeVideoUrl({ videoId, url });
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'youtube-summary-transcript-'));
+  const args = [
+    '--skip-download',
+    '--no-playlist',
+    '--no-warnings',
+    '--write-auto-subs',
+    '--write-subs',
+    '--sub-langs', YTDLP_TRANSCRIPT_LANGS,
+    '--sub-format', YTDLP_TRANSCRIPT_FORMAT,
+    '--output', path.join(tmpDir, '%(id)s.%(ext)s'),
+    watchUrl,
+  ];
+  let lastError = null;
+  try {
+    for (const candidate of ytdlpCandidates()) {
+      try {
+        execFileSync(candidate, args, {
+          encoding: 'utf8',
+          timeout: YTDLP_TRANSCRIPT_TIMEOUT_MS,
+          maxBuffer: 4 * 1024 * 1024,
+          stdio: ['ignore', 'pipe', 'pipe'],
+        });
+        lastError = null;
+        break;
+      } catch (error) {
+        lastError = error;
+        if (readSubtitleCandidates(tmpDir).length) break;
+      }
+    }
+
+    const subtitles = readSubtitleCandidates(tmpDir);
+    if (!subtitles.length) {
+      const detail = lastError?.stderr || lastError?.message || 'yt-dlp did not produce a usable English subtitle file.';
+      throw new Error(`Transcript fallback failed: ${String(detail).trim().slice(0, 500)}`);
+    }
+    const best = subtitles[0];
+    return { ok: true, transcript: best.transcript, source: 'yt-dlp', file: best.file, chars: best.chars };
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+}
+
 function buildPrompt(video) {
   const source = normalizeSource(video);
   if (source.sourceType === 'webpage') return buildWebpagePrompt(source);
@@ -716,6 +855,7 @@ module.exports = {
   buildPrompt,
   callOpenRouter,
   classifyCategory,
+  fetchTranscript,
   findExistingSummary,
   getOpenRouterApiKey,
   normalizeSource,
@@ -724,5 +864,6 @@ module.exports = {
   stripSourceTextSection,
   summarizeAndSave,
   systemPromptFor,
+  transcriptFromSubtitleText,
   updateMarkdownCategory,
 };

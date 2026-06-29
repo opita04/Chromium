@@ -81,6 +81,24 @@ async function testFindExistingRoutesThroughLocalService() {
   const result = await worker.send({ type: 'FIND_EXISTING_SUMMARY', videoId: 'abc123' }); assert.equal(result.ok, true); assert.equal(result.found, true); assert.equal(result.markdown, '# Existing'); assert.equal(worker.fetchCalls.length, 1);
 }
 
+async function testTranscriptFallbackRoutesThroughLocalService() {
+  const worker = createServiceWorker({ fetchHandler: async (url, options = {}) => {
+    if (url.endsWith('/api/youtube-summary/extension-auth')) return jsonResponse({ ok: true, headerName: 'X-YouTube-Summary-Token', token: 'test-local-token' });
+    assert.equal(url, 'http://127.0.0.1:4789/api/youtube-summary/transcript');
+    assert.equal(options.method, 'POST');
+    assert.equal(options.headers['Content-Type'], 'application/json');
+    assertLocalAuthHeader(options);
+    const body = JSON.parse(options.body);
+    assert.equal(body.videoId, 'abc123');
+    assert.equal(body.url, 'https://www.youtube.com/watch?v=abc123');
+    return jsonResponse({ ok: true, transcript: 'Fallback transcript '.repeat(10), source: 'yt-dlp' });
+  } });
+  const result = await worker.send({ type: 'FETCH_YOUTUBE_TRANSCRIPT', videoId: 'abc123', url: 'https://www.youtube.com/watch?v=abc123' });
+  assert.equal(result.ok, true);
+  assert.match(result.transcript, /Fallback transcript/);
+  assert.deepEqual(worker.fetchCalls.map(([url]) => new URL(url).pathname), ['/api/youtube-summary/extension-auth', '/api/youtube-summary/transcript']);
+}
+
 async function testSaveMarkdownRoutesThroughLocalService() {
   const worker = createServiceWorker({ fetchHandler: async (url, options = {}) => { if (url.endsWith('/api/youtube-summary/extension-auth')) return jsonResponse({ ok: true, headerName: 'X-YouTube-Summary-Token', token: 'test-local-token' }); assert.equal(url, 'http://127.0.0.1:4789/api/youtube-summary/save'); assert.equal(options.method, 'POST'); assert.equal(options.headers['Content-Type'], 'application/json'); assertLocalAuthHeader(options); const body = JSON.parse(options.body); assert.equal(body.markdown, '# Saved'); assert.equal(body.category, 'Coding'); assert.equal(body.previousPath, '/tmp/old.md'); return jsonResponse({ ok: true, markdown: '# Saved', path: '/tmp/saved.md', category: 'Coding' }); } });
   const result = await worker.send({ type: 'SAVE_MARKDOWN', video: { videoId: 'abc123', title: 'Example' }, markdown: '# Saved', category: 'Coding', previousPath: '/tmp/old.md' }); assert.equal(result.ok, true); assert.equal(result.path, '/tmp/saved.md'); assert.equal(worker.fetchCalls.length, 2);
@@ -103,4 +121,4 @@ async function testActionClickInjectsYoutubeContentScriptWhenMissing() {
 
 function testContentTimeoutExceedsBackgroundLocalJobTimeout() { const summaryTimeout = Number(contentScriptSource.match(/SUMMARY_RESPONSE_TIMEOUT_MS\s*=\s*(\d+)/)?.[1] || 0); const localJobTimeout = Number(scriptSource.match(/LOCAL_SUMMARY_JOB_TIMEOUT_MS\s*=\s*(\d+)/)?.[1] || 0); assert.ok(summaryTimeout >= localJobTimeout + 30000, 'content timeout ' + summaryTimeout + 'ms must leave room for local job timeout ' + localJobTimeout + 'ms plus extraction/overhead'); }
 
-(async () => { await testSummarizeRoutesThroughLocalJobApi(); await testLocalAuthBootstrapUsesAllowlistedIdWhenRuntimeIdIsMissingOrSafariScoped(); await testSummarizeReturnsFailedLocalJobAsMessageResponse(); await testFindExistingRoutesThroughLocalService(); await testSaveMarkdownRoutesThroughLocalService(); await testLocalServiceHttpErrorsBecomeMessageErrors(); await testLocalServiceNetworkErrorsBecomeUnavailableMessage(); await testMutatingLocalAuthErrorsBecomeClearMessage(); await testMutatingRequestRetriesOnceAfterStaleLocalAuth(); await testLegacyAuthEndpointStillWorksForOldLocalServices(); await testActionClickInjectsYoutubeContentScriptWhenMissing(); testContentTimeoutExceedsBackgroundLocalJobTimeout(); console.log('service-worker-contract.test.js passed'); })().catch((error) => { console.error(error); process.exit(1); });
+(async () => { await testSummarizeRoutesThroughLocalJobApi(); await testLocalAuthBootstrapUsesAllowlistedIdWhenRuntimeIdIsMissingOrSafariScoped(); await testSummarizeReturnsFailedLocalJobAsMessageResponse(); await testFindExistingRoutesThroughLocalService(); await testTranscriptFallbackRoutesThroughLocalService(); await testSaveMarkdownRoutesThroughLocalService(); await testLocalServiceHttpErrorsBecomeMessageErrors(); await testLocalServiceNetworkErrorsBecomeUnavailableMessage(); await testMutatingLocalAuthErrorsBecomeClearMessage(); await testMutatingRequestRetriesOnceAfterStaleLocalAuth(); await testLegacyAuthEndpointStillWorksForOldLocalServices(); await testActionClickInjectsYoutubeContentScriptWhenMissing(); testContentTimeoutExceedsBackgroundLocalJobTimeout(); console.log('service-worker-contract.test.js passed'); })().catch((error) => { console.error(error); process.exit(1); });

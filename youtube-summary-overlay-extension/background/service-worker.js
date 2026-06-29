@@ -9,6 +9,7 @@ const OPENROUTER_API_KEY_STORAGE_KEYS = ['openRouterApiKey', 'OPENROUTER_API_KEY
 const LOCAL_SUMMARY_SERVICE_BASE_URL = 'http://127.0.0.1:4789';
 const LOCAL_SUMMARY_JOB_TIMEOUT_MS = 150000;
 const LOCAL_SUMMARY_POLL_INTERVAL_MS = 1000;
+const LOCAL_TRANSCRIPT_FALLBACK_TIMEOUT_MS = 90000;
 const LOCAL_SUMMARY_AUTH_STORAGE_KEY = 'localYouTubeSummaryToken';
 const LOCAL_SUMMARY_AUTH_HEADER_FALLBACK = 'X-YouTube-Summary-Token';
 const LOCAL_SUMMARY_EXTENSION_ID_HEADER = 'X-YouTube-Summary-Extension-Id';
@@ -523,6 +524,15 @@ async function findExistingSummaryBestAvailable({ videoId }) {
   return fetchLocalSummaryJson(`/api/youtube-summary/existing?videoId=${encodeURIComponent(videoId || '')}`, { timeoutMs: 15000 });
 }
 
+async function fetchTranscriptBestAvailable({ videoId, url }) {
+  return fetchLocalSummaryJson('/api/youtube-summary/transcript', {
+    method: 'POST',
+    body: { videoId, url },
+    timeoutMs: LOCAL_TRANSCRIPT_FALLBACK_TIMEOUT_MS,
+    auth: true,
+  });
+}
+
 async function saveMarkdownBestAvailable({ markdown, video, category, previousPath }) {
   return fetchLocalSummaryJson('/api/youtube-summary/save', {
     method: 'POST',
@@ -625,6 +635,10 @@ async function handleRuntimeMessage(message) {
 
   if (message?.type === 'FIND_EXISTING_SUMMARY') {
     return findExistingSummaryBestAvailable({ videoId: message.videoId });
+  }
+
+  if (message?.type === 'FETCH_YOUTUBE_TRANSCRIPT') {
+    return fetchTranscriptBestAvailable({ videoId: message.videoId, url: message.url });
   }
 
   if (message?.type === 'SAVE_MARKDOWN') {

@@ -2,7 +2,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
-const { CATEGORIES, CONTEXT_LENGTH_FALLBACK_MODEL, DEFAULT_MODEL, FALLBACK_MODEL, DEFAULT_OUTPUT_DIR, buildMarkdown, buildPrompt, callOpenRouter, classifyCategory, findExistingSummary, normalizeSource, outputPathFor, saveMarkdown, systemPromptFor, updateMarkdownCategory } = require('../native/summarizer');
+const { CATEGORIES, CONTEXT_LENGTH_FALLBACK_MODEL, DEFAULT_MODEL, FALLBACK_MODEL, DEFAULT_OUTPUT_DIR, buildMarkdown, buildPrompt, callOpenRouter, classifyCategory, findExistingSummary, normalizeSource, outputPathFor, saveMarkdown, systemPromptFor, transcriptFromSubtitleText, updateMarkdownCategory } = require('../native/summarizer');
 
 assert.equal(DEFAULT_MODEL, 'mistralai/mistral-small-24b-instruct-2501');
 assert.equal(FALLBACK_MODEL, 'mistralai/mistral-small-24b-instruct-2501');
@@ -40,6 +40,20 @@ assert.match(prompt, /### A\./);
 assert.doesNotMatch(prompt, /## Why It Matters/);
 assert.doesNotMatch(prompt, /## Notable Details/);
 assert.match(systemPromptFor(video), /YouTube transcript analysis/);
+
+const json3Transcript = transcriptFromSubtitleText(JSON.stringify({
+  events: [
+    { segs: [{ utf8: 'Caption fallback ' }, { utf8: 'uses subtitle files. ' }] },
+    { segs: [{ utf8: 'It survives empty timedtext responses.' }] },
+  ],
+}));
+assert.equal(json3Transcript, 'Caption fallback uses subtitle files. It survives empty timedtext responses.');
+
+const vttTranscript = transcriptFromSubtitleText('WEBVTT\n\n00:00:01.000 --> 00:00:04.000\nFallback transcript text\n\n00:00:04.000 --> 00:00:08.000\nfrom a VTT file');
+assert.equal(vttTranscript, 'Fallback transcript text from a VTT file');
+
+const srtTranscript = transcriptFromSubtitleText('1\n00:00:01,000 --> 00:00:04,000\nFallback transcript text\n\n2\n00:00:04,000 --> 00:00:08,000\nfrom an SRT file');
+assert.equal(srtTranscript, 'Fallback transcript text from an SRT file');
 
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'yt-summary-test-'));
 const result = saveMarkdown({ video, markdown, outputDir: tmp, category: 'Educational' });

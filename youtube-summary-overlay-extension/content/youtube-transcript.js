@@ -6,6 +6,7 @@
   const SUMMARY_RESPONSE_TIMEOUT_MS = 180000;
   const EXISTING_SUMMARY_LOOKUP_TIMEOUT_MS = 8000;
   const SAVE_MARKDOWN_TIMEOUT_MS = 60000;
+  const TRANSCRIPT_FALLBACK_TIMEOUT_MS = 90000;
   const STORAGE_OPERATION_TIMEOUT_MS = 1500;
   const CATEGORIES = ['Political', 'Coding', 'Educational', 'General', 'Business', 'AI', 'Finance', 'Health', 'Science', 'Others'];
   const MODEL_PRESETS = [
@@ -435,6 +436,26 @@
     return '';
   }
 
+  async function getLocalServiceTranscriptFallback(diagnostics = []) {
+    const response = await sendMessage({
+      type: 'FETCH_YOUTUBE_TRANSCRIPT',
+      videoId: new URL(location.href).searchParams.get('v') || '',
+      url: location.href,
+    }, TRANSCRIPT_FALLBACK_TIMEOUT_MS);
+
+    if (response?.ok && String(response.transcript || '').trim().length >= 50) {
+      console.info(`Loaded transcript from local fallback: ${response.source || 'local service'}`);
+      return String(response.transcript).trim();
+    }
+
+    if (response?.error) {
+      diagnostics.push(`Local transcript fallback failed: ${response.error}`);
+    } else {
+      diagnostics.push('Local transcript fallback did not return enough text.');
+    }
+    return '';
+  }
+
   function currentVideoId() {
     try {
       return new URL(location.href).searchParams.get('v') || location.href;
@@ -598,6 +619,10 @@
     if (!transcript) {
       const opened = await openTranscriptPanel(diagnostics);
       if (opened) transcript = await getTranscriptText(diagnostics);
+    }
+
+    if (!transcript) {
+      transcript = await getLocalServiceTranscriptFallback(diagnostics);
     }
 
     if (!transcript) {
