@@ -4,8 +4,8 @@ const os = require('node:os');
 const path = require('node:path');
 const { CATEGORIES, CONTEXT_LENGTH_FALLBACK_MODEL, DEFAULT_MODEL, FALLBACK_MODEL, DEFAULT_OUTPUT_DIR, buildMarkdown, buildPrompt, callOpenRouter, classifyCategory, findExistingSummary, normalizeSource, outputPathFor, saveMarkdown, systemPromptFor, transcriptFromSubtitleText, updateMarkdownCategory } = require('../native/summarizer');
 
-assert.equal(DEFAULT_MODEL, 'mistralai/mistral-small-24b-instruct-2501');
-assert.equal(FALLBACK_MODEL, 'mistralai/mistral-small-24b-instruct-2501');
+assert.equal(DEFAULT_MODEL, 'mistralai/mistral-nemo');
+assert.equal(FALLBACK_MODEL, 'mistralai/mistral-nemo');
 assert.equal(CONTEXT_LENGTH_FALLBACK_MODEL, 'google/gemini-2.5-flash-lite');
 assert.equal(DEFAULT_OUTPUT_DIR, '/Users/opita/Documents/Obsidian/youtube-summaries');
 assert.equal(CATEGORIES.length, 10);

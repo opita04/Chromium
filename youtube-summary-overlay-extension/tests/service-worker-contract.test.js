@@ -43,11 +43,11 @@ async function testSummarizeRoutesThroughLocalJobApi() {
   const worker = createServiceWorker({ fetchHandler: async (url, options = {}) => {
     assert.match(url, /^http:\/\/127\.0\.0\.1:4789\/api\/youtube-summary\//); assert.ok(!/openrouter\.ai/.test(url));
     if (url.endsWith('/api/youtube-summary/extension-auth')) { assert.equal(options.method, 'GET'); assert.equal(options.headers['X-YouTube-Summary-Extension-Id'], 'lbbncpgjnoffnhihjnomphmabaieaaoo'); return jsonResponse({ ok: true, headerName: 'X-YouTube-Summary-Token', token: 'test-local-token' }); }
-    if (url.endsWith('/api/youtube-summary/jobs')) { assert.equal(options.method, 'POST'); assert.equal(options.headers['Content-Type'], 'application/json'); assertLocalAuthHeader(options); const body = JSON.parse(options.body); assert.equal(body.video.videoId, 'abc123'); assert.equal(body.model, 'mistralai/mistral-small-24b-instruct-2501'); return jsonResponse({ ok: true, id: 'job-1', status: 'queued' }, true, 202); }
-    if (url.endsWith('/api/youtube-summary/jobs/job-1')) { assert.equal(options.method, 'GET'); return jsonResponse({ ok: true, id: 'job-1', status: 'succeeded', result: { ok: true, markdown: '# Local Summary', path: '/tmp/local.md', category: 'General', model: 'mistralai/mistral-small-24b-instruct-2501' } }); }
+    if (url.endsWith('/api/youtube-summary/jobs')) { assert.equal(options.method, 'POST'); assert.equal(options.headers['Content-Type'], 'application/json'); assertLocalAuthHeader(options); const body = JSON.parse(options.body); assert.equal(body.video.videoId, 'abc123'); assert.equal(body.model, 'mistralai/mistral-nemo'); return jsonResponse({ ok: true, id: 'job-1', status: 'queued' }, true, 202); }
+    if (url.endsWith('/api/youtube-summary/jobs/job-1')) { assert.equal(options.method, 'GET'); return jsonResponse({ ok: true, id: 'job-1', status: 'succeeded', result: { ok: true, markdown: '# Local Summary', path: '/tmp/local.md', category: 'General', model: 'mistralai/mistral-nemo' } }); }
     throw new Error('unexpected fetch ' + url);
   } });
-  const result = await worker.send({ type: 'SUMMARIZE_AND_SAVE', video: { videoId: 'abc123', title: 'Example', transcript: 'Long transcript '.repeat(20) }, model: 'mistralai/mistral-small-24b-instruct-2501' });
+  const result = await worker.send({ type: 'SUMMARIZE_AND_SAVE', video: { videoId: 'abc123', title: 'Example', transcript: 'Long transcript '.repeat(20) }, model: 'mistralai/mistral-nemo' });
   assert.equal(result.ok, true); assert.equal(result.markdown, '# Local Summary'); assert.equal(result.path, '/tmp/local.md');
   assert.deepEqual(worker.fetchCalls.map(([url]) => new URL(url).pathname), ['/api/youtube-summary/extension-auth', '/api/youtube-summary/jobs', '/api/youtube-summary/jobs/job-1']);
 }
