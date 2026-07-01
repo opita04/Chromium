@@ -1,8 +1,8 @@
 (() => {
   'use strict';
 
-  const DEFAULT_MODEL = 'mistralai/mistral-nemo';
-  const PREVIOUS_DEFAULT_MODELS = new Set(['nvidia/nemotron-3-ultra-550b-a55b:free', 'mistralai/mistral-small-24b-instruct-2501']);
+  const DEFAULT_MODEL = 'openrouter/free';
+  const PREVIOUS_DEFAULT_MODELS = new Set(['nvidia/nemotron-3-ultra-550b-a55b:free', 'mistralai/mistral-nemo']);
   const SUMMARY_RESPONSE_TIMEOUT_MS = 180000;
   const EXISTING_SUMMARY_LOOKUP_TIMEOUT_MS = 8000;
   const SAVE_MARKDOWN_TIMEOUT_MS = 60000;
@@ -13,7 +13,7 @@
     ['DeepSeek Flash', 'deepseek/deepseek-v4-flash', 'assets/model-icons/deepseek-color.svg'],
     ['Qwen', 'qwen/qwen3.6-flash', 'assets/model-icons/qwen-color.png'],
     ['Gemini', 'google/gemini-2.5-flash-lite', 'assets/model-icons/gemini-color.svg'],
-    ['Mistral Nemo', 'mistralai/mistral-nemo', 'assets/model-icons/mistral-color.svg'],
+    ['Mistral', 'mistralai/mistral-small-24b-instruct-2501', 'assets/model-icons/mistral-color.svg'],
     ['Free Route', 'openrouter/free', null],
     ['GPT-5', 'openai/gpt-5-nano', 'assets/model-icons/icons8-chatgpt.svg'],
   ];
@@ -1334,7 +1334,7 @@
           if (isLaunchCurrent(context)) setProgress(50, `Still waiting on ${selectedModel}…`);
         }, 5000),
         setTimeout(() => {
-          if (isLaunchCurrent(context)) setProgress(65, selectedModel === DEFAULT_MODEL ? 'Mistral Nemo is still thinking…' : `Still waiting on ${selectedModel}…`);
+          if (isLaunchCurrent(context)) setProgress(65, selectedModel === DEFAULT_MODEL ? 'Free Route is still queued…' : `Still waiting on ${selectedModel}…`);
         }, 8500),
         setTimeout(() => {
           if (isLaunchCurrent(context)) setProgress(78, 'Finishing summary request…');

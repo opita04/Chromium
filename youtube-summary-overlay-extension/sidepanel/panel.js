@@ -3,7 +3,7 @@ let currentMarkdown = '';
 let currentSavedPath = '';
 let currentCategory = 'General';
 
-const DEFAULT_MODEL = 'mistralai/mistral-nemo';
+const DEFAULT_MODEL = 'openrouter/free';
 const CATEGORIES = ['Political', 'Coding', 'Educational', 'General', 'Business', 'AI', 'Finance', 'Health', 'Science', 'Others'];
 const $ = (id) => document.getElementById(id);
 
