@@ -1,6 +1,6 @@
 const HOST_NAME = 'com.opita.youtube_summary_sidepanel';
-const DEFAULT_MODEL = 'mistralai/mistral-nemo';
-const PREVIOUS_DEFAULT_MODELS = new Set(['nvidia/nemotron-3-ultra-550b-a55b:free', 'mistralai/mistral-small-24b-instruct-2501']);
+const DEFAULT_MODEL = 'openrouter/free';
+const PREVIOUS_DEFAULT_MODELS = new Set(['nvidia/nemotron-3-ultra-550b-a55b:free', 'mistralai/mistral-nemo']);
 const NATIVE_MESSAGE_TIMEOUT_MS = 45000;
 const OPENROUTER_TIMEOUT_MS = 120000;
 const OPENROUTER_MAX_TOKENS = 2600;

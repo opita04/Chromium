@@ -3,10 +3,10 @@ const os = require('node:os');
 const path = require('node:path');
 const { execFileSync } = require('node:child_process');
 
-const DEFAULT_MODEL = 'mistralai/mistral-nemo';
-const FALLBACK_MODEL = 'mistralai/mistral-nemo';
+const DEFAULT_MODEL = 'openrouter/free';
+const FALLBACK_MODEL = 'mistralai/mistral-small-24b-instruct-2501';
 const CONTEXT_LENGTH_FALLBACK_MODEL = 'google/gemini-2.5-flash-lite';
-const PREVIOUS_DEFAULT_MODELS = new Set(['nvidia/nemotron-3-ultra-550b-a55b:free', 'mistralai/mistral-small-24b-instruct-2501']);
+const PREVIOUS_DEFAULT_MODELS = new Set(['nvidia/nemotron-3-ultra-550b-a55b:free', 'mistralai/mistral-nemo']);
 const FALLBACK_SOURCE_MODELS = new Set(['openrouter/free', 'nvidia/nemotron-3-ultra-550b-a55b:free']);
 const OPENROUTER_TIMEOUT_MS = Number.parseInt(process.env.OPENROUTER_TIMEOUT_MS || '120000', 10);
 const OPENROUTER_MAX_TOKENS = Number.parseInt(process.env.OPENROUTER_MAX_TOKENS || '2600', 10);

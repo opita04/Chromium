@@ -15,8 +15,8 @@ Chromium extension for Jaime's daily YouTube and readable web-page summary workf
 - Extracts readable article/page text by removing common navigation, ads, comments, related links, sidebars, forms, and other page chrome before summarizing.
 - Sends transcript or webpage text to OpenRouter via the native host.
 - Adds an optional overlay dropdown to send the full transcript prompt to ChatGPT, Claude, Gemini, Mistral, Grok, or DeepSeek.
-- Uses the default model: `mistralai/mistral-nemo`. A Free Route option (using `openrouter/free`) is available as a preset, with a timeout fallback to Mistral Nemo if OpenRouter queues it too long.
-- Adds overlay redo buttons for DeepSeek Flash, Qwen Flash, Gemini Lite, Mistral Nemo, Free Route, and GPT-5 Nano.
+- Uses the default model: `openrouter/free`, with a timeout fallback to `mistralai/mistral-small-24b-instruct-2501` if OpenRouter queues it too long.
+- Adds overlay redo buttons for DeepSeek Flash, Qwen Flash, Gemini Lite, Mistral, Free Route, and GPT-5 Nano.
 - Lets you override the detected save folder after a summary is generated and move the Markdown note into a different category folder.
 - Saves Markdown notes under category folders inside:
 

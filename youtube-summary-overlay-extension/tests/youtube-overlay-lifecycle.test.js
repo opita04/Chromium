@@ -357,7 +357,7 @@ function createSandbox({ cached = null, existingSummary = null, summaryResult = 
       markdown: '# Ready Summary\n\n- Done',
       path: '',
       category: 'General',
-      model: 'mistralai/mistral-nemo',
+      model: 'openrouter/free',
       video: { videoId: 'abc123', title: 'Lifecycle test', channel: 'Lifecycle Channel' },
     }) {
       summarizeDeferred.resolve(result);
@@ -417,7 +417,7 @@ async function testCacheHitOpensImmediately() {
       markdown: '# Cached Summary',
       video: { videoId: 'abc123', title: 'Cached title', channel: 'Cached channel' },
       category: 'General',
-      model: 'mistralai/mistral-nemo',
+      model: 'openrouter/free',
     },
   });
   await openFromToolbar(env);
