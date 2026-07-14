@@ -20,7 +20,7 @@ A Chrome extension that helps you track and manage watched YouTube videos and sh
 - **Statistics**: View detailed watch history statistics
 - **Backup/Restore**: Export and import your watch history as JSON
 - **Data Migration**: Import from original TamperMonkey script or YouTube's own data export
-- **Auto Cleanup**: Automatically removes old entries (configurable, default: 10 years)
+- **Auto Cleanup**: Automatically removes entries more than one year old
 
 ### 🎬 YouTube Shorts Support
 - **Shorts Detection**: Automatically detects and can hide/dim YouTube Shorts
@@ -75,7 +75,7 @@ The extension includes several configurable options:
 
 ### In-Script Configuration
 Edit `src/content.js` to modify:
-- `maxWatchedVideoAge`: How long to keep watch history (days, default: 3650)
+- `maxWatchedVideoAge`: How long to keep watch history (days, default: 365)
 - `contentLoadMarkDelay`: Delay before marking videos (ms, default: 600)
 - `markerMouseButtons`: Which mouse buttons work for manual toggle (default: [0,1] = left+right)
 

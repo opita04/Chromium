@@ -17,7 +17,7 @@
   }
 
   //=== config start ===
-  var maxWatchedVideoAge = 10 * 365; // number of days. set to zero to disable (not recommended)
+  var maxWatchedVideoAge = 365; // number of days. set to zero to disable (not recommended)
   var contentLoadMarkDelay = 600; // number of milliseconds to wait before marking video items on content load phase (increase if slow network/browser)
   var markerMouseButtons = [0, 1]; // one or more mouse buttons to use for manual marker toggle. 0=left, 1=right, 2=middle
   //=== config end ===
@@ -33,7 +33,7 @@
   }
 
   function watched(vid) {
-    return !!watchedVideos.entries[vid];
+    return !!watchedVideos?.entries?.[vid];
   }
 
   function processVideoItems(selector) {
@@ -61,6 +61,7 @@
       ytd-playlist-panel-video-renderer,
       ytd-reel-item-renderer,
       ytd-rich-grid-media,
+      yt-lockup-view-model,
       .yt-shelf-grid-item,
       .video-list-item,
       .ytd-newspaper-renderer,
@@ -85,6 +86,26 @@
     delete watchedVideos.entries[watchedVideos.index[index]];
     watchedVideos.index.splice(index, 1);
     if (!noSave) await gmSet("watchedVideos", JSON.stringify(watchedVideos));
+  }
+
+  function pruneOldHistory(now, maxAgeDays) {
+    if (maxAgeDays <= 0) return 0;
+
+    const cutoff = now - (maxAgeDays * ageMultiplier);
+    let removed = 0;
+    Object.keys(watchedVideos.entries).forEach(vid => {
+      const timestamp = Number(watchedVideos.entries[vid]);
+      if (!Number.isFinite(timestamp) || timestamp < cutoff) {
+        delete watchedVideos.entries[vid];
+        removed++;
+      }
+    });
+
+    if (removed > 0) {
+      watchedVideos.index = Object.keys(watchedVideos.entries)
+        .sort((a, b) => watchedVideos.entries[a] - watchedVideos.entries[b]);
+    }
+    return removed;
   }
 
   var dc, ut;
@@ -169,15 +190,11 @@
     console.log('After getHistory, watchedVideos index length: ' + (watchedVideos ? watchedVideos.index.length : 'undefined'));
 
     //remove old watched video history
-    var now = (new Date()).valueOf(), changed, vid;
-    if (maxWatchedVideoAge > 0) {
-      while (watchedVideos.index.length) {
-        if (((now - watchedVideos.entries[watchedVideos.index[0]]) / ageMultiplier) > maxWatchedVideoAge) {
-          await delHistory(0, true);
-          changed = true;
-        } else break;
-      }
-      if (changed) await gmSet("watchedVideos", JSON.stringify(watchedVideos));
+    var now = (new Date()).valueOf(), vid;
+    const removed = pruneOldHistory(now, maxWatchedVideoAge);
+    if (removed > 0) {
+      await gmSet("watchedVideos", JSON.stringify(watchedVideos));
+      console.log(`[MWYV] Removed ${removed} watched video(s) older than ${maxWatchedVideoAge} days`);
     }
 
     //check and remember current video
@@ -185,6 +202,8 @@
 
     //mark watched videos
     processAllVideoItems();
+    updateClassOnWatchedItems();
+    updateClassOnShortsItems();
 
     // One-shot: auto-import videos YouTube already knows are watched (delayed to let thumbnails render)
     setTimeout(() => autoImportWatchedFromProgressBars().catch(console.error), contentLoadMarkDelay);
@@ -629,6 +648,7 @@ History data size: ${JSON.stringify(watchedVideos).length} bytes\
         || el.closest('ytd-compact-video-renderer')
         || el.closest('ytd-playlist-video-renderer')
         || el.closest('ytd-rich-grid-media')
+        || el.closest('yt-lockup-view-model')
         || el.closest('.ytd-item-section-renderer')
         || el;
       if (container && !seen.has(container)) {
@@ -693,6 +713,7 @@ History data size: ${JSON.stringify(watchedVideos).length} bytes\
       console.log(`[MWYV] Auto-imported ${imported} video(s) from YouTube signals`);
       // Update green outlines for newly-imported videos
       processAllVideoItems();
+      updateClassOnWatchedItems();
     }
   }
 
