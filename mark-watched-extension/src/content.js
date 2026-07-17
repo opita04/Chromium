@@ -617,10 +617,27 @@ History data size: ${JSON.stringify(watchedVideos).length} bytes\
 
   // --- Watched video detection using multiple YouTube signals ---
   function getProgressPercent(bar) {
+    if (!bar) return 0;
+    const ariaValue = Number.parseFloat(bar.getAttribute('aria-valuenow'));
+    const ariaMax = Number.parseFloat(bar.getAttribute('aria-valuemax'));
+    if (Number.isFinite(ariaValue)) {
+      return Number.isFinite(ariaMax) && ariaMax > 0 ? (ariaValue / ariaMax) * 100 : ariaValue;
+    }
+    if (bar instanceof HTMLProgressElement && bar.max > 0) {
+      return (bar.value / bar.max) * 100;
+    }
     // Check inline style width
     if (bar.style.width) {
-      const w = Number.parseInt(bar.style.width, 10);
+      const w = Number.parseFloat(bar.style.width);
       if (!isNaN(w)) return w;
+    }
+    // Modern YouTube variants sometimes keep the percentage in a CSS custom property.
+    for (const property of bar.style) {
+      const value = bar.style.getPropertyValue(property);
+      if (/progress|watched/i.test(property) && value.includes('%')) {
+        const percentage = Number.parseFloat(value);
+        if (Number.isFinite(percentage)) return percentage;
+      }
     }
     // Check computed width as percentage of parent
     try {
@@ -660,12 +677,23 @@ History data size: ${JSON.stringify(watchedVideos).length} bytes\
     // Signal 1: Red progress bar with sufficient width
     document.querySelectorAll(
       'ytd-thumbnail-overlay-resume-playback-renderer #progress, ' +
-      '.ytd-thumbnail-overlay-resume-playback-renderer, ' +
-      '.ytThumbnailOverlayProgressBarHostWatchedProgressBarSegmentModern'
+      '.ytd-thumbnail-overlay-resume-playback-renderer'
     ).forEach(bar => {
       // If it's the parent renderer, the width might be on the child #progress
       const actualBar = bar.id === 'progress' || bar.style.width ? bar : (bar.querySelector('#progress') || bar);
       if (getProgressPercent(actualBar) >= threshold) addContainer(bar);
+    });
+
+    // Signal 1b: the current lockup renderer uses a progress-bar view model. On
+    // WebKit/Orion its filled segment can have no measurable layout width even
+    // though YouTube visibly paints the red bar, so the host itself is also a
+    // watched signal when no numeric percentage can be recovered.
+    document.querySelectorAll('yt-thumbnail-overlay-progress-bar-view-model').forEach(host => {
+      const candidates = host.querySelectorAll(
+        'progress, #progress, [class*="WatchedProgressBarSegment"], [style*="width"], [aria-valuenow]'
+      );
+      const percentages = [...candidates].map(getProgressPercent).filter(value => value > 0);
+      if (percentages.length === 0 || Math.max(...percentages) >= threshold) addContainer(host);
     });
 
     // Signal 2: Explicit "WATCHED" badge
@@ -752,6 +780,35 @@ History data size: ${JSON.stringify(watchedVideos).length} bytes\
     return youtubeSection;
   }
 
+  const WATCHED_STATE_KEY = 'MWYV_STATE_WATCHED';
+  const LEGACY_WATCHED_STATE_KEYS = [
+    'MWYV_STATE_misc',
+    'MWYV_STATE_watch',
+    'MWYV_STATE_channel',
+    'MWYV_STATE_subscriptions',
+    'MWYV_STATE_trending',
+    'MWYV_STATE_playlist',
+    'MWYV_STATE_search'
+  ];
+
+  function getWatchedState() {
+    const savedState = localStorage.getItem(WATCHED_STATE_KEY);
+    if (['normal', 'dimmed', 'hidden'].includes(savedState)) return savedState;
+
+    // Migrate the strongest existing per-section preference so users who hid
+    // watched videos anywhere keep that behavior across every YouTube page.
+    const legacyStates = LEGACY_WATCHED_STATE_KEYS.map(key => localStorage.getItem(key));
+    const migratedState = legacyStates.includes('hidden')
+      ? 'hidden'
+      : legacyStates.includes('dimmed') ? 'dimmed' : 'normal';
+    localStorage.setItem(WATCHED_STATE_KEY, migratedState);
+    return migratedState;
+  }
+
+  function setWatchedState(state) {
+    localStorage.setItem(WATCHED_STATE_KEY, state);
+  }
+
   // --- Update watched/shorts classes (SYNC — no async/await here) ---
   function updateClassOnWatchedItems() {
     // Clear previous dim/hide classes
@@ -759,8 +816,7 @@ History data size: ${JSON.stringify(watchedVideos).length} bytes\
     document.querySelectorAll('.YT-HWV-WATCHED-HIDDEN').forEach(el => el.classList.remove('YT-HWV-WATCHED-HIDDEN'));
     if (window.location.href.indexOf('/feed/history') >= 0) return;
 
-    const section = determineYoutubeSection();
-    const state = localStorage[`MWYV_STATE_${section}`];
+    const state = getWatchedState();
     if (!state || state === 'normal') return; // nothing to do
 
     // Collect all containers: YouTube-detected + internally tracked
@@ -799,8 +855,9 @@ History data size: ${JSON.stringify(watchedVideos).length} bytes\
       iconHidden: '<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 48 48"><path fill="currentColor" d="M24 14c5.52 0 10 4.48 10 10 0 1.29-.26 2.52-.71 3.65l5.85 5.85c3.02-2.52 5.4-5.78 6.87-9.5-3.47-8.78-12-15-22.01-15-2.8 0-5.48.5-7.97 1.4l4.32 4.31c1.13-.44 2.36-.71 3.65-.71zM4 8.55l4.56 4.56.91.91C6.17 16.6 3.56 20.03 2 24c3.46 8.78 12 15 22 15 3.1 0 6.06-.6 8.77-1.69l.85.85L39.45 44 42 41.46 6.55 6 4 8.55zM15.06 19.6l3.09 3.09c-.09.43-.15.86-.15 1.31 0 3.31 2.69 6 6 6 .45 0 .88-.06 1.3-.15l3.09 3.09C27.06 33.6 25.58 34 24 34c-5.52 0-10-4.48-10-10 0-1.58.4-3.06 1.06-4.4zm8.61-1.57 6.3 6.3L30 24c0-3.31-2.69-6-6-6l-.33.03z"/></svg>',
       name: 'Toggle Watched Videos',
       stateKey: 'MWYV_STATE',
+      globalState: true,
       type: 'toggle',
-      tooltip: 'Show/hide watched videos (normal → dimmed → hidden)\n\nTip: Alt+Click any video thumbnail to manually toggle watched status'
+      tooltip: 'Show/hide watched videos everywhere on YouTube (normal → dimmed → hidden)\n\nTip: Alt+Click any video thumbnail to manually toggle watched status'
     },
     {
       icon: '<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 48 48"><path fill="currentColor" d="M31.95 3c-1.11 0-2.25.3-3.27.93l-15.93 9.45C10.32 14.79 8.88 17.67 9 20.7c.15 3 1.74 5.61 4.17 6.84.06.03 2.25 1.05 2.25 1.05l-2.7 1.59c-3.42 2.04-4.74 6.81-2.94 10.65C11.07 43.47 13.5 45 16.05 45c1.11 0 2.22-.3 3.27-.93l15.93-9.45c2.4-1.44 3.87-4.29 3.72-7.35-.12-2.97-1.74-5.61-4.17-6.81-.06-.03-2.25-1.05-2.25-1.05l2.7-1.59c3.42-2.04 4.74-6.81 2.91-10.65C36.93 4.53 34.47 3 31.95 3z"/></svg>',
@@ -856,12 +913,13 @@ History data size: ${JSON.stringify(watchedVideos).length} bytes\
       setupTooltip(expandButton, 'Show Mark Watched controls');
       buttonArea.appendChild(expandButton);
     } else {
-      MWYV_BUTTONS.forEach(({ icon, iconHidden, name, stateKey, type }) => {
+      MWYV_BUTTONS.forEach(({ icon, iconHidden, name, stateKey, globalState, type }) => {
         const section = determineYoutubeSection();
-        const storageKey = [stateKey, section].join('_');
-        const toggleButtonState = localStorage.getItem(storageKey) || 'normal';
+        const storageKey = globalState ? WATCHED_STATE_KEY : [stateKey, section].join('_');
+        const toggleButtonState = globalState ? getWatchedState() : (localStorage.getItem(storageKey) || 'normal');
         const button = document.createElement('button');
-        button.title = type === 'toggle' ? `${name} : currently "${toggleButtonState}" for section "${section}"` : `${name}`;
+        const stateScope = globalState ? 'across YouTube' : `for section "${section}"`;
+        button.title = type === 'toggle' ? `${name} : currently "${toggleButtonState}" ${stateScope}` : `${name}`;
         button.classList.add('YT-HWV-BUTTON');
         if (toggleButtonState !== 'normal') button.classList.add('YT-HWV-BUTTON-DISABLED');
         // Use Trusted Types for innerHTML
@@ -874,7 +932,8 @@ History data size: ${JSON.stringify(watchedVideos).length} bytes\
               let newState = 'dimmed';
               if (toggleButtonState === 'dimmed') newState = 'hidden';
               else if (toggleButtonState === 'hidden') newState = 'normal';
-              localStorage.setItem(storageKey, newState);
+              if (globalState) setWatchedState(newState);
+              else localStorage.setItem(storageKey, newState);
               // Process all video items first to ensure watched status is up to date
               processAllVideoItems();
               updateClassOnWatchedItems();

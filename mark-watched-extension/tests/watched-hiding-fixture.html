@@ -14,8 +14,23 @@
   <yt-lockup-view-model id="modern-recent-video">
     <a class="ytLockupViewModelContentImage" href="https://www.youtube.com/watch?v=recent002">Modern recent video</a>
   </yt-lockup-view-model>
+  <ytd-rich-item-renderer id="youtube-progress-video">
+    <yt-lockup-view-model>
+      <a class="ytLockupViewModelContentImage" href="https://www.youtube.com/watch?v=progress001">YouTube progress video</a>
+      <yt-thumbnail-overlay-progress-bar-view-model></yt-thumbnail-overlay-progress-bar-view-model>
+    </yt-lockup-view-model>
+  </ytd-rich-item-renderer>
+  <ytd-rich-item-renderer id="low-progress-video">
+    <a id="thumbnail" href="https://www.youtube.com/watch?v=progress002">Low progress video</a>
+    <yt-thumbnail-overlay-progress-bar-view-model>
+      <div class="ytThumbnailOverlayProgressBarHostWatchedProgressBarSegmentModern" style="width: 5%"></div>
+    </yt-thumbnail-overlay-progress-bar-view-model>
+  </ytd-rich-item-renderer>
 
   <script>
+    if (new URLSearchParams(location.search).get('section') === 'subscriptions') {
+      history.replaceState(null, '', '/feed/subscriptions');
+    }
     const now = Date.now();
     const extensionStorage = {
       watchedVideos: JSON.stringify({
@@ -46,6 +61,6 @@
     };
     localStorage.setItem('MWYV_STATE_misc', 'hidden');
   </script>
-  <script src="../src/content.js"></script>
+  <script src="/src/content.js"></script>
 </body>
 </html>
