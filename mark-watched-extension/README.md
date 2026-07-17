@@ -11,8 +11,8 @@ A Chrome extension that helps you track and manage watched YouTube videos and sh
 - **Smart Detection**: Uses both manual tracking and YouTube's native progress bars
 
 ### 🎛️ Advanced Controls
-- **Hide/Dim Options**: Hide or dim watched videos and shorts per YouTube section
-- **Section-Specific Settings**: Different visibility settings for Home, Subscriptions, Channels, etc.
+- **Hide/Dim Options**: Hide or dim watched videos across every YouTube section
+- **Independent Shorts Settings**: Shorts visibility remains configurable per YouTube section
 - **Threshold Control**: Set percentage threshold for progress-bar based detection (default: 10%)
 - **Header Integration**: Clean button interface in YouTube's header
 
@@ -81,7 +81,8 @@ Edit `src/content.js` to modify:
 
 ### Runtime Configuration  
 - **Threshold Setting**: Use the settings button to adjust progress bar detection threshold
-- **Section States**: Each YouTube section (home, subscriptions, etc.) remembers its own visibility settings
+- **Global Watched State**: Watched-video visibility applies consistently across Home, Subscriptions, Search, Channels, and playlists
+- **Shorts Section States**: Each YouTube section remembers its own Shorts visibility setting
 - **Data Management**: Use backup/restore for data migration between devices
 
 ## 🔄 Changelog
