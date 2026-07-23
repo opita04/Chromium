@@ -3,7 +3,8 @@
 
   const DEFAULT_MODEL = 'openrouter/free';
   const PREVIOUS_DEFAULT_MODELS = new Set(['nvidia/nemotron-3-ultra-550b-a55b:free', 'mistralai/mistral-nemo']);
-  const SUMMARY_RESPONSE_TIMEOUT_MS = 180000;
+  // A summary must complete or produce a concrete error within 90 seconds.
+  const SUMMARY_RESPONSE_TIMEOUT_MS = 90000;
   const EXISTING_SUMMARY_LOOKUP_TIMEOUT_MS = 8000;
   const SAVE_MARKDOWN_TIMEOUT_MS = 60000;
   const TRANSCRIPT_FALLBACK_TIMEOUT_MS = 90000;
@@ -1337,8 +1338,11 @@
           if (isLaunchCurrent(context)) setProgress(65, selectedModel === DEFAULT_MODEL ? 'Free Route is still queued…' : `Still waiting on ${selectedModel}…`);
         }, 8500),
         setTimeout(() => {
-          if (isLaunchCurrent(context)) setProgress(78, 'Finishing summary request…');
+          if (isLaunchCurrent(context)) setProgress(78, 'Still processing the summary request…');
         }, 12000),
+        setTimeout(() => {
+          if (isLaunchCurrent(context)) setProgress(82, 'Still processing; trying the fallback model if needed…');
+        }, 45000),
       ];
       let result;
       try {

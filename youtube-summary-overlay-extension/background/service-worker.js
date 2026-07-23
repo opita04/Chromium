@@ -7,7 +7,9 @@ const OPENROUTER_MAX_TOKENS = 2600;
 const STORAGE_OPERATION_TIMEOUT_MS = 1500;
 const OPENROUTER_API_KEY_STORAGE_KEYS = ['openRouterApiKey', 'OPENROUTER_API_KEY'];
 const LOCAL_SUMMARY_SERVICE_BASE_URL = 'http://127.0.0.1:4789';
-const LOCAL_SUMMARY_JOB_TIMEOUT_MS = 150000;
+// The native service gets two 40-second provider attempts. Stop polling before
+// the content-script deadline so the user gets a clear error within 90 seconds.
+const LOCAL_SUMMARY_JOB_TIMEOUT_MS = 85000;
 const LOCAL_SUMMARY_POLL_INTERVAL_MS = 1000;
 const LOCAL_TRANSCRIPT_FALLBACK_TIMEOUT_MS = 90000;
 const LOCAL_SUMMARY_AUTH_STORAGE_KEY = 'localYouTubeSummaryToken';
