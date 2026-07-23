@@ -8,7 +8,9 @@ const FALLBACK_MODEL = 'mistralai/mistral-small-24b-instruct-2501';
 const CONTEXT_LENGTH_FALLBACK_MODEL = 'google/gemini-2.5-flash-lite';
 const PREVIOUS_DEFAULT_MODELS = new Set(['nvidia/nemotron-3-ultra-550b-a55b:free', 'mistralai/mistral-nemo']);
 const FALLBACK_SOURCE_MODELS = new Set(['openrouter/free', 'nvidia/nemotron-3-ultra-550b-a55b:free']);
-const OPENROUTER_TIMEOUT_MS = Number.parseInt(process.env.OPENROUTER_TIMEOUT_MS || '120000', 10);
+// Keep each provider attempt short: the service gets one fallback attempt and
+// must return a result or error within the extension's 90-second deadline.
+const OPENROUTER_TIMEOUT_MS = Number.parseInt(process.env.OPENROUTER_TIMEOUT_MS || '40000', 10);
 const OPENROUTER_MAX_TOKENS = Number.parseInt(process.env.OPENROUTER_MAX_TOKENS || '2600', 10);
 const YTDLP_TRANSCRIPT_TIMEOUT_MS = Number.parseInt(process.env.YTDLP_TRANSCRIPT_TIMEOUT_MS || '90000', 10);
 const YTDLP_TRANSCRIPT_LANGS = process.env.YTDLP_TRANSCRIPT_LANGS || 'en,en-orig,en-en,en-US,en-GB';
@@ -708,25 +710,14 @@ async function callOpenRouter({ video, model = DEFAULT_MODEL }) {
       return requestOpenRouter({ video, model: CONTEXT_LENGTH_FALLBACK_MODEL });
     }
     if (isEmptySummaryError(error)) {
-      logNative('openrouter empty summary, retrying model once', {
+      if (selectedModel === CONTEXT_LENGTH_FALLBACK_MODEL) throw error;
+      logNative('openrouter empty summary, falling back', {
         model: selectedModel,
+        fallbackModel: CONTEXT_LENGTH_FALLBACK_MODEL,
         finishReason: error.finishReason,
         choiceCount: error.choiceCount,
       });
-      try {
-        return await requestOpenRouter({ video, model: selectedModel });
-      } catch (retryError) {
-        if (isEmptySummaryError(retryError) && selectedModel !== CONTEXT_LENGTH_FALLBACK_MODEL) {
-          logNative('openrouter empty summary retry failed, falling back', {
-            model: selectedModel,
-            fallbackModel: CONTEXT_LENGTH_FALLBACK_MODEL,
-            finishReason: retryError.finishReason,
-            choiceCount: retryError.choiceCount,
-          });
-          return requestOpenRouter({ video, model: CONTEXT_LENGTH_FALLBACK_MODEL });
-        }
-        throw retryError;
-      }
+      return requestOpenRouter({ video, model: CONTEXT_LENGTH_FALLBACK_MODEL });
     }
     if (FALLBACK_SOURCE_MODELS.has(selectedModel) && error?.name === 'AbortError') {
       logNative('openrouter model timed out, falling back', { model: selectedModel, fallbackModel: FALLBACK_MODEL, timeoutMs: OPENROUTER_TIMEOUT_MS });

@@ -194,11 +194,11 @@ function testPermissionErrorsAreActionable() {
   try {
     assert.throws(
       () => findExistingSummary({ videoId: video.videoId, outputDir: inaccessibleDir }),
-      /Cannot access the Obsidian summary folder: .*macOS privacy permissions.*Full Disk Access/
+      /Cannot access the Obsidian summary folder: .*macOS privacy permissions.*com\.opita\.macos-multitool.*Full Disk Access/
     );
     assert.throws(
       () => saveMarkdown({ video, markdown, outputDir: inaccessibleDir, category: 'Coding' }),
-      /Cannot access the Obsidian summary folder: .*macOS privacy permissions.*Full Disk Access/
+      /Cannot access the Obsidian summary folder: .*macOS privacy permissions.*com\.opita\.macos-multitool.*Full Disk Access/
     );
   } finally {
     fs.accessSync = originalAccessSync;
@@ -284,7 +284,7 @@ async function testPreviousDefaultNormalizesToMistral() {
   }
 }
 
-async function testEmptyMistralResponseRetriesSameModel() {
+async function testEmptySummaryFallsBackWithoutRetryingTheSameModel() {
   const originalFetch = global.fetch;
   const originalApiKey = process.env.OPENROUTER_API_KEY;
   const calls = [];
@@ -296,7 +296,7 @@ async function testEmptyMistralResponseRetriesSameModel() {
       ok: true,
       status: 200,
       json: async () => ({
-        choices: [{ finish_reason: 'stop', message: { content: calls.length === 1 ? '' : '# Retry summary' } }],
+        choices: [{ finish_reason: 'stop', message: { content: calls.length === 1 ? '' : '# Fallback summary' } }],
         usage: { prompt_tokens: 12, completion_tokens: 3 },
       }),
     };
@@ -304,9 +304,9 @@ async function testEmptyMistralResponseRetriesSameModel() {
 
   try {
     const result = await callOpenRouter({ video, model: DEFAULT_MODEL });
-    assert.equal(result.model, DEFAULT_MODEL);
-    assert.equal(result.markdown, '# Retry summary');
-    assert.deepEqual(calls, [DEFAULT_MODEL, DEFAULT_MODEL]);
+    assert.equal(result.model, CONTEXT_LENGTH_FALLBACK_MODEL);
+    assert.equal(result.markdown, '# Fallback summary');
+    assert.deepEqual(calls, [DEFAULT_MODEL, CONTEXT_LENGTH_FALLBACK_MODEL]);
   } finally {
     global.fetch = originalFetch;
     if (originalApiKey === undefined) {
@@ -317,7 +317,7 @@ async function testEmptyMistralResponseRetriesSameModel() {
   }
 }
 
-async function testRepeatedEmptySummaryFallsBack() {
+async function testEmptyFallbackFailureDoesNotRetryIndefinitely() {
   const originalFetch = global.fetch;
   const originalApiKey = process.env.OPENROUTER_API_KEY;
   const calls = [];
@@ -329,17 +329,15 @@ async function testRepeatedEmptySummaryFallsBack() {
       ok: true,
       status: 200,
       json: async () => ({
-        choices: [{ finish_reason: 'stop', message: { content: calls.length < 3 ? '' : '# Backup summary' } }],
+        choices: [{ finish_reason: 'stop', message: { content: '' } }],
         usage: { prompt_tokens: 12, completion_tokens: 3 },
       }),
     };
   };
 
   try {
-    const result = await callOpenRouter({ video, model: DEFAULT_MODEL });
-    assert.equal(result.model, CONTEXT_LENGTH_FALLBACK_MODEL);
-    assert.equal(result.markdown, '# Backup summary');
-    assert.deepEqual(calls, [DEFAULT_MODEL, DEFAULT_MODEL, CONTEXT_LENGTH_FALLBACK_MODEL]);
+    await assert.rejects(() => callOpenRouter({ video, model: DEFAULT_MODEL }), /OpenRouter returned an empty summary/);
+    assert.deepEqual(calls, [DEFAULT_MODEL, CONTEXT_LENGTH_FALLBACK_MODEL]);
   } finally {
     global.fetch = originalFetch;
     if (originalApiKey === undefined) {
@@ -388,8 +386,8 @@ testPermissionErrorsAreActionable();
 (async () => {
   await testContextLengthFallback();
   await testPreviousDefaultNormalizesToMistral();
-  await testEmptyMistralResponseRetriesSameModel();
-  await testRepeatedEmptySummaryFallsBack();
+  await testEmptySummaryFallsBackWithoutRetryingTheSameModel();
+  await testEmptyFallbackFailureDoesNotRetryIndefinitely();
   await testUnreadableOpenRouterBodyDoesNotBecomeEmptySummary();
   console.log('summarizer.test.js passed');
 })().catch((error) => {
