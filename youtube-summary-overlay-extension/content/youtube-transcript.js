@@ -559,12 +559,56 @@
     });
   }
 
+  function storageRemove(storage, key, timeoutMs = STORAGE_OPERATION_TIMEOUT_MS) {
+    return new Promise((resolve, reject) => {
+      if (!storage?.remove) {
+        resolve();
+        return;
+      }
+      let settled = false;
+      const finish = (fn, value) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        fn(value);
+      };
+      const timer = setTimeout(() => finish(reject, new Error('storage.remove timed out')), timeoutMs);
+      try {
+        const maybePromise = storage.remove(key, () => finish(resolve));
+        if (maybePromise?.then) {
+          maybePromise.then(
+            () => finish(resolve),
+            (error) => finish(reject, error)
+          );
+        }
+      } catch (error) {
+        finish(reject, error);
+      }
+    });
+  }
+
   async function readCachedSummary(videoId = currentVideoId()) {
     const storage = storageLocal();
     if (!storage) return null;
     try {
-      const data = await storageGet(storage, cacheKey(videoId));
-      return data[cacheKey(videoId)] || null;
+      const key = cacheKey(videoId);
+      const data = await storageGet(storage, key);
+      const cached = data[key] || null;
+      if (!cached?.markdown) return cached;
+      if (String(cached?.video?.videoId || '').trim() === String(videoId || '').trim()) return cached;
+
+      // Cache keys are only a lookup optimization. Never display a summary when
+      // its embedded video identity disagrees with the current watch page.
+      console.warn('Discarding mismatched cached YouTube summary:', {
+        expectedVideoId: videoId,
+        cachedVideoId: cached?.video?.videoId || '',
+      });
+      try {
+        await storageRemove(storage, key);
+      } catch (error) {
+        console.warn('Could not remove mismatched cached YouTube summary:', error);
+      }
+      return null;
     } catch (error) {
       console.warn('Could not read cached YouTube summary:', error);
       return null;

@@ -333,6 +333,11 @@ function createSandbox({ cached = null, existingSummary = null, summaryResult = 
             if (callback) callback();
             return Promise.resolve();
           },
+          remove(key, callback) {
+            delete storageData[key];
+            if (callback) callback();
+            return Promise.resolve();
+          },
         },
       },
     },
@@ -424,6 +429,28 @@ async function testCacheHitOpensImmediately() {
   const overlay = env.document.getElementById('opita-youtube-summary-overlay');
   assert.equal(overlay.hidden, false);
   assert.match(overlay.querySelector('[data-role="summary"]').textContent, /Cached Summary/);
+}
+
+async function testMismatchedCacheIsDiscardedBeforeGeneration() {
+  const env = createSandbox({
+    cached: {
+      markdown: '# Wrong Video Summary',
+      video: { videoId: 'different456', title: 'Wrong video', channel: 'Wrong channel' },
+      category: 'General',
+      model: 'openrouter/free',
+    },
+  });
+  await openFromToolbar(env);
+  const overlay = env.document.getElementById('opita-youtube-summary-overlay');
+  assert.equal(overlay.hidden, true, 'mismatched cache must not be displayed');
+  assert.deepEqual(messageTypes(env), ['FIND_EXISTING_SUMMARY', 'SUMMARIZE_AND_SAVE']);
+
+  env.resolveSummary();
+  await tick();
+  await tick();
+  assert.equal(overlay.hidden, false);
+  assert.match(overlay.querySelector('[data-role="summary"]').textContent, /Ready Summary/);
+  assert.doesNotMatch(overlay.querySelector('[data-role="summary"]').textContent, /Wrong Video Summary/);
 }
 
 async function testSavedSummaryHitOpensImmediatelyWithoutGeneration() {
@@ -521,6 +548,7 @@ async function testStaleLaunchDoesNotOpenAfterVideoNavigation() {
   await testFullMissStaysHiddenUntilSummaryReady();
   await testPageButtonFullMissStaysHiddenUntilSummaryReady();
   await testCacheHitOpensImmediately();
+  await testMismatchedCacheIsDiscardedBeforeGeneration();
   await testSavedSummaryHitOpensImmediatelyWithoutGeneration();
   await testStalledCacheReadFallsThroughToGeneration();
   await testSafariRuntimeWithChromeCallbackCompletesGeneration();
