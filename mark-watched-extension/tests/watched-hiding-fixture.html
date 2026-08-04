@@ -5,6 +5,7 @@
   <title>Mark Watched hiding fixture</title>
 </head>
 <body>
+  <div id="fixture-feed">
   <ytd-rich-item-renderer id="expired-video">
     <a id="thumbnail" href="https://www.youtube.com/watch?v=expired001">Expired video</a>
   </ytd-rich-item-renderer>
@@ -26,23 +27,49 @@
       <div class="ytThumbnailOverlayProgressBarHostWatchedProgressBarSegmentModern" style="width: 5%"></div>
     </yt-thumbnail-overlay-progress-bar-view-model>
   </ytd-rich-item-renderer>
+  <ytd-rich-item-renderer id="href-reuse-video">
+    <a id="thumbnail" href="https://www.youtube.com/watch?v=href-old">Href reuse video</a>
+  </ytd-rich-item-renderer>
+  </div>
 
   <script>
-    if (new URLSearchParams(location.search).get('section') === 'subscriptions') {
+    const isSubscriptions = new URLSearchParams(location.search).get('section') === 'subscriptions';
+    const mode = new URLSearchParams(location.search).get('mode') || 'hidden';
+    if (isSubscriptions) {
       history.replaceState(null, '', '/feed/subscriptions');
+    } else {
+      history.replaceState(null, '', '/@calmmoonasmr/videos');
     }
     const now = Date.now();
+    const watchedEntries = {
+      recent001: now - (30 * 24 * 60 * 60 * 1000),
+      recent002: now - (10 * 24 * 60 * 60 * 1000),
+      progress001: now - (8 * 24 * 60 * 60 * 1000),
+      progress002: now - (7 * 24 * 60 * 60 * 1000),
+      'late-legacy': now - (6 * 24 * 60 * 60 * 1000),
+      'late-modern': now - (5 * 24 * 60 * 60 * 1000),
+      'href-new': now - (4 * 24 * 60 * 60 * 1000),
+      'ambiguous-video': now - (3 * 24 * 60 * 60 * 1000),
+      'drift-video': now - (2 * 24 * 60 * 60 * 1000)
+    };
+    for (let i = 0; i < 100; i++) {
+      watchedEntries[`burst-${i}`] = now - (i + 1) * 60 * 1000;
+    }
     const extensionStorage = {
       watchedVideos: JSON.stringify({
         // Deliberately unsorted to prove cleanup checks every entry.
         entries: {
-          recent001: now - (30 * 24 * 60 * 60 * 1000),
-          recent002: now - (10 * 24 * 60 * 60 * 1000),
+          ...watchedEntries,
           expired001: now - (366 * 24 * 60 * 60 * 1000)
         },
-        index: ['recent001', 'recent002', 'expired001']
+        index: Object.keys({
+          ...watchedEntries,
+          expired001: now - (366 * 24 * 60 * 60 * 1000)
+        })
       })
     };
+    const counters = {};
+    globalThis.__MWYV_TEST_HOOK__ = { counters };
     globalThis.chrome = {
       runtime: {},
       storage: {
@@ -53,13 +80,71 @@
             callback(result);
           },
           set(values) {
+            counters.storageWrites = (counters.storageWrites || 0) + 1;
             Object.assign(extensionStorage, values);
             return Promise.resolve();
           }
         }
       }
     };
-    localStorage.setItem('MWYV_STATE_misc', 'hidden');
+    localStorage.setItem('MWYV_STATE_WATCHED_REST', 'normal');
+    localStorage.setItem('MWYV_STATE_WATCHED_SUBSCRIPTIONS', isSubscriptions ? mode : 'normal');
+    localStorage.setItem('MWYV_WATCHED_SCOPE_SPLIT_V2', 'true');
+    localStorage.setItem('MWYV_AUTO_IMPORT_PROGRESS', 'true');
+
+    function legacyCard(id) {
+      const card = document.createElement('ytd-rich-item-renderer');
+      card.id = id;
+      const link = document.createElement('a');
+      link.id = 'thumbnail';
+      link.href = `https://www.youtube.com/watch?v=${id}`;
+      link.textContent = id;
+      card.appendChild(link);
+      return card;
+    }
+
+    function modernCard(id) {
+      const card = document.createElement('yt-lockup-view-model');
+      card.id = id;
+      const link = document.createElement('a');
+      link.className = 'ytLockupViewModelContentImage';
+      link.href = `https://www.youtube.com/watch?v=${id}`;
+      link.textContent = id;
+      card.appendChild(link);
+      return card;
+    }
+
+    function signalCard(id, signal) {
+      const card = legacyCard(id);
+      if (signal === 'style') {
+        const host = document.createElement('yt-thumbnail-overlay-progress-bar-view-model');
+        const segment = document.createElement('div');
+        segment.className = 'ytThumbnailOverlayProgressBarHostWatchedProgressBarSegmentModern';
+        segment.style.width = '0%';
+        host.appendChild(segment);
+        card.appendChild(host);
+      } else if (signal === 'aria') {
+        const host = document.createElement('yt-thumbnail-overlay-progress-bar-view-model');
+        const segment = document.createElement('div');
+        segment.setAttribute('aria-valuenow', '0');
+        segment.setAttribute('aria-valuemax', '100');
+        host.appendChild(segment);
+        card.appendChild(host);
+      } else if (signal === 'overlay') {
+        const badge = document.createElement('ytd-thumbnail-overlay-time-status-renderer');
+        badge.setAttribute('overlay-style', 'NONE');
+        card.appendChild(badge);
+      } else if (signal === 'class') {
+        const host = document.createElement('yt-thumbnail-overlay-progress-bar-view-model');
+        const segment = document.createElement('div');
+        segment.className = 'signal-segment';
+        host.appendChild(segment);
+        card.appendChild(host);
+      }
+      return card;
+    }
+
+    globalThis.__MWYV_FIXTURE__ = { legacyCard, modernCard, signalCard };
   </script>
   <script src="/src/content.js"></script>
 </body>
