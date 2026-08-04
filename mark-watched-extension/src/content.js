@@ -21,7 +21,7 @@
             resolve(fallbackValue);
             return;
           }
-          const storedValue = result[key];
+          const storedValue = result?.[key];
           resolve(storedValue ?? fallbackValue);
         });
       } catch (_) {
@@ -36,8 +36,11 @@
     } catch (_) { /* ignore localStorage quota/private-mode errors */ }
     if (globalThis.chrome?.storage?.local?.set) {
       try {
-        return chrome.storage.local.set({ [key]: value });
-      } catch (_) { /* fall through */ }
+        return Promise.resolve(chrome.storage.local.set({ [key]: value }))
+          .then(result => result);
+      } catch (error) {
+        return Promise.reject(error);
+      }
     }
     return Promise.resolve();
   }
@@ -77,6 +80,12 @@
   `;
   const VIDEO_CARD_SELECTOR = `${VIDEO_CARD_RENDERER_SELECTOR}, ${VIDEO_CARD_AUX_SELECTOR}`;
   const CARD_IDENTITY_CACHE = new WeakMap();
+  let historyGeneration = 0;
+  let historyDirty = false;
+  let historyWriteChain = Promise.resolve(true);
+  let historyRetryScheduled = false;
+  let historyRetryGeneration = -1;
+  let lastReadableHistory = null;
   const mwTestCounters = globalThis.__MWYV_TEST_HOOK__?.counters || null;
   const DEBUG_COUNTER_DEFAULTS = [
     'scheduledReconciliations',
@@ -88,7 +97,6 @@
     'signalScans',
     'headerRenders',
     'hrefCacheInvalidations',
-    'storageWrites',
     'historyReady'
   ];
   if (mwTestCounters) {
@@ -98,6 +106,47 @@
   }
   function debugCount(name, amount = 1) {
     if (mwTestCounters) mwTestCounters[name] = (mwTestCounters[name] || 0) + amount;
+  }
+
+  function markHistoryDirty() {
+    historyGeneration += 1;
+    historyDirty = true;
+    return historyGeneration;
+  }
+
+  function scheduleHistoryRetry() {
+    if (!historyDirty || historyRetryScheduled || historyRetryGeneration === historyGeneration) return;
+    historyRetryGeneration = historyGeneration;
+    historyRetryScheduled = true;
+    setTimeout(() => {
+      historyRetryScheduled = false;
+      if (historyDirty) enqueueHistoryWrite().catch(() => {});
+    }, 250);
+  }
+
+  function enqueueHistoryWrite() {
+    historyWriteChain = historyWriteChain
+      .catch(() => false)
+      .then(async () => {
+        if (!watchedVideos || !historyDirty) return true;
+        const generation = historyGeneration;
+        const snapshot = JSON.stringify(watchedVideos);
+        const wrote = await gmSet('watchedVideos', snapshot).then(
+          () => true,
+          error => {
+            console.warn('[MWYV] History write deferred after storage failure', error);
+            scheduleHistoryRetry();
+            return false;
+          }
+        );
+        if (wrote && generation === historyGeneration) {
+          historyDirty = false;
+          lastReadableHistory = JSON.parse(snapshot);
+          historyRetryGeneration = -1;
+        }
+        return wrote;
+      });
+    return historyWriteChain;
   }
 
   function elementFromNode(node) {
@@ -186,13 +235,15 @@
       if (i >= 0) watchedVideos.index.push(watchedVideos.index.splice(i, 1)[0])
     }
     watchedVideos.entries[vid] = time;
-    if (!noSave) await gmSet("watchedVideos", JSON.stringify(watchedVideos));
+    markHistoryDirty();
+    if (!noSave) await enqueueHistoryWrite();
   }
 
   async function delHistory(index, noSave) {
     delete watchedVideos.entries[watchedVideos.index[index]];
     watchedVideos.index.splice(index, 1);
-    if (!noSave) await gmSet("watchedVideos", JSON.stringify(watchedVideos));
+    markHistoryDirty();
+    if (!noSave) await enqueueHistoryWrite();
   }
 
   function pruneOldHistory(now, maxAgeDays) {
@@ -294,15 +345,14 @@
     console.log('getHistory started');
     a = await gmGet("watchedVideos");
     console.log('gmGet returned: ' + (a === null ? 'null' : typeof a));
-    if (a == null || a === "") {
-      a = '{"entries": {}, "index": []}';
-    } else if ("object" === typeof a) a = JSON.stringify(a);
-
-    if (b = parseData(a)) {
-      watchedVideos = b;
-    } else {
-      watchedVideos = { entries: {}, index: [] };
-    }
+    const source = a == null || a === ''
+      ? null
+      : typeof a === 'object' ? JSON.stringify(a) : String(a);
+    const parsed = source && parseData(source);
+    if (parsed) watchedVideos = parsed;
+    else if (lastReadableHistory) watchedVideos = JSON.parse(JSON.stringify(lastReadableHistory));
+    else watchedVideos = { entries: {}, index: [] };
+    let changed = !!source && (!parsed || dc || JSON.stringify(watchedVideos) !== source);
 
     // Safari temporary extensions have a fresh storage namespace. Merge the
     // bundled Brave export once so Safari starts with the same watched-video
@@ -310,15 +360,20 @@
     if (localStorage.getItem(BUNDLED_IMPORT_FLAG) !== 'true') {
       const imported = await loadBundledHistoryImport();
       if (imported && (b = parseData(imported)) && b.index.length) {
-        const before = watchedVideos.index.length;
+        const beforeSnapshot = JSON.stringify(watchedVideos);
+        const beforeCount = watchedVideos.index.length;
         mergeData(b);
         localStorage.setItem(BUNDLED_IMPORT_FLAG, 'true');
-        console.log(`[MWYV] Merged bundled Brave import: ${before} → ${watchedVideos.index.length} entries`);
+        console.log(`[MWYV] Merged bundled Brave import: ${beforeCount} → ${watchedVideos.index.length} entries`);
+        changed = changed || JSON.stringify(watchedVideos) !== beforeSnapshot;
       }
     }
 
-    b = JSON.stringify(watchedVideos);
-    await gmSet("watchedVideos", b);
+    lastReadableHistory = JSON.parse(JSON.stringify(watchedVideos));
+    if (changed) {
+      markHistoryDirty();
+      await enqueueHistoryWrite();
+    }
   }
 
   async function doProcessPage() {
@@ -332,7 +387,8 @@
     var now = (new Date()).valueOf(), vid;
     const removed = pruneOldHistory(now, maxWatchedVideoAge);
     if (removed > 0) {
-      await gmSet("watchedVideos", JSON.stringify(watchedVideos));
+      markHistoryDirty();
+      await enqueueHistoryWrite();
       console.log(`[MWYV] Removed ${removed} watched video(s) older than ${maxWatchedVideoAge} days`);
     }
 
@@ -600,9 +656,9 @@ History data size: ${JSON.stringify(watchedVideos).length} bytes\
         if (mergeCheckbox && mergeCheckbox.checked) {
           mergeData(o);
         } else watchedVideos = o;
-        gmSet("watchedVideos", JSON.stringify(watchedVideos));
+        markHistoryDirty();
         a.remove();
-        doProcessPage().catch(console.error);
+        enqueueHistoryWrite().then(() => doProcessPage()).catch(console.error);
       }
     }
     if (window.mwyvrh_ujs) return;
@@ -895,7 +951,7 @@ History data size: ${JSON.stringify(watchedVideos).length} bytes\
       }
     }
     if (imported > 0) {
-      await gmSet("watchedVideos", JSON.stringify(watchedVideos));
+      await enqueueHistoryWrite();
       console.log(`[MWYV] Auto-imported ${imported} video(s) from YouTube signals`);
       if (refresh) {
         // Update green outlines for newly-imported videos
@@ -909,7 +965,8 @@ History data size: ${JSON.stringify(watchedVideos).length} bytes\
 
   // --- Shorts detection ---
   function findShortsContainers() {
-    const shortsContainers = [
+    const shortsContainers = new Set();
+    [
       document.querySelectorAll('[is-shorts]'),
       document.querySelectorAll('ytd-reel-shelf-renderer ytd-reel-item-renderer'),
       document.querySelectorAll('ytd-rich-shelf-renderer ytd-rich-grid-slim-media'),
@@ -918,15 +975,15 @@ History data size: ${JSON.stringify(watchedVideos).length} bytes\
     ].reduce((acc, matches) => {
       matches?.forEach(child => {
         const container = child.closest('ytd-reel-shelf-renderer') || child.closest('ytd-rich-shelf-renderer');
-        if (container && !acc.includes(container)) acc.push(container);
+        if (container) acc.add(container);
       });
       return acc;
-    }, []);
+    }, shortsContainers);
     document.querySelectorAll('.ytd-thumbnail-overlay-time-status-renderer[aria-label="Shorts"]').forEach(child => {
       const container = child.closest('ytd-video-renderer') || child.closest('ytd-rich-item-renderer') || child.closest('ytd-grid-video-renderer') || child.closest('ytd-compact-video-renderer') || child;
-      if (container && !shortsContainers.includes(container)) shortsContainers.push(container);
+      if (container) shortsContainers.add(container);
     });
-    return shortsContainers;
+    return [...shortsContainers];
   }
 
   // --- Section detection for per-section state ---
@@ -1035,11 +1092,13 @@ History data size: ${JSON.stringify(watchedVideos).length} bytes\
 
   function updateClassOnWatchedItems(signalContainers = null, { roots = null, clearGlobal = true } = {}) {
     const signals = signalContainers || findWatchedContainers();
-    const cardRoots = roots || collectCardRoots(document);
-    document.querySelectorAll('.watched').forEach(element => {
-      const root = canonicalizeCardRoot(element);
-      if (root) cardRoots.add(root);
-    });
+    const cardRoots = roots ? new Set(roots) : collectCardRoots(document);
+    if (!roots) {
+      document.querySelectorAll('.watched').forEach(element => {
+        const root = canonicalizeCardRoot(element);
+        if (root) cardRoots.add(root);
+      });
+    }
     applyWatchedPresentation(cardRoots, signals, { clearGlobal });
   }
 
@@ -1094,16 +1153,26 @@ History data size: ${JSON.stringify(watchedVideos).length} bytes\
     });
   }
 
-  function renderMWYVButtons() {
-    debugCount('headerRenders');
-    console.log('renderMWYVButtons called');
+  let lastHeaderRenderSignature = null;
+  function renderMWYVButtons({ force = false } = {}) {
     // Find button area target
     const target = document.querySelector('#container #end #buttons') ||
       document.querySelector('ytd-masthead #end #buttons') ||
       document.querySelector('ytd-masthead #buttons');
-    console.log('Button target:', target);
     // Did we already render the buttons?
     const existingButtons = document.querySelector('.YT-HWV-BUTTONS');
+    const section = determineYoutubeSection();
+    const signature = [
+      section,
+      getWatchedState(section),
+      localStorage.getItem(`MWYV_STATE_SHORTS_${section}`) || 'normal',
+      getButtonsCollapsed(),
+      Boolean(target)
+    ].join('|');
+    if (!force && existingButtons && signature === lastHeaderRenderSignature) return false;
+    lastHeaderRenderSignature = signature;
+    debugCount('headerRenders');
+    console.log('renderMWYVButtons called', { section, target });
     // Generate buttons area DOM
     const buttonArea = document.createElement('div');
     buttonArea.classList.add('YT-HWV-BUTTONS');

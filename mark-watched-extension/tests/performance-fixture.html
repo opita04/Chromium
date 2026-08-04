@@ -1,0 +1,116 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>Mark Watched performance fixture</title>
+</head>
+<body>
+  <div id="container"><div id="end"><div id="buttons"></div></div></div>
+  <main id="fixture-feed"></main>
+  <script>
+    const params = new URLSearchParams(location.search);
+    const mode = params.get('mode') || 'hidden';
+    const failReadOnLoad = params.get('failRead') === 'true';
+    const now = Date.now();
+    const watchedEntries = {};
+    for (let i = 0; i < 100; i++) watchedEntries[`burst-${i}`] = now - (i + 1) * 60 * 1000;
+    for (let batch = 0; batch < 5; batch++) {
+      for (let i = 0; i < 100; i++) watchedEntries[`batch-${batch}-${i}`] = now - (batch * 100 + i + 1) * 60 * 1000;
+    }
+    watchedEntries['readable-id'] = now - 800;
+    const extensionStorage = {
+      watchedVideos: JSON.stringify({ entries: watchedEntries, index: Object.keys(watchedEntries) })
+    };
+    const counters = { storageReads: 0, storageWrites: 0 };
+    const controls = {
+      failNextRead: failReadOnLoad,
+      failNextWrite: false,
+      blockWrites: false,
+      pendingWrites: [],
+      releaseWrites() {
+        const pending = this.pendingWrites.splice(0);
+        pending.forEach(resolve => resolve());
+      }
+    };
+    globalThis.__MWYV_TEST_HOOK__ = { counters };
+    globalThis.__MWYV_PERF_FIXTURE__ = {
+      controls,
+      storage: extensionStorage,
+      legacyCard(id) {
+        const card = document.createElement('ytd-rich-item-renderer');
+        card.id = id;
+        const link = document.createElement('a');
+        link.id = 'thumbnail';
+        link.href = `https://www.youtube.com/watch?v=${id}`;
+        link.textContent = id;
+        card.appendChild(link);
+        return card;
+      },
+      modernCard(id) {
+        const card = document.createElement('yt-lockup-view-model');
+        card.id = id;
+        const link = document.createElement('a');
+        link.className = 'ytLockupViewModelContentImage';
+        link.href = `https://www.youtube.com/watch?v=${id}`;
+        link.textContent = id;
+        card.appendChild(link);
+        return card;
+      },
+      signalCard(id) {
+        const card = this.legacyCard(id);
+        const host = document.createElement('yt-thumbnail-overlay-progress-bar-view-model');
+        card.appendChild(host);
+        return card;
+      }
+    };
+    globalThis.chrome = {
+      runtime: {},
+      storage: {
+        local: {
+          get(keys, callback) {
+            counters.storageReads++;
+            if (controls.failNextRead) {
+              controls.failNextRead = false;
+              callback(undefined);
+              return;
+            }
+            const result = {};
+            keys.forEach(key => { result[key] = extensionStorage[key]; });
+            callback(result);
+          },
+          set(values) {
+            counters.storageWrites++;
+            if (controls.failNextWrite) {
+              controls.failNextWrite = false;
+              return Promise.reject(new Error('fixture write failure'));
+            }
+            const apply = () => Object.assign(extensionStorage, values);
+            if (controls.blockWrites) {
+              return new Promise(resolve => {
+                controls.pendingWrites.push(() => {
+                  apply();
+                  resolve();
+                });
+              });
+            }
+            apply();
+            return Promise.resolve();
+          }
+        }
+      }
+    };
+    localStorage.setItem('MWYV_STATE_WATCHED_REST', 'normal');
+    localStorage.setItem('MWYV_STATE_WATCHED_SUBSCRIPTIONS', mode);
+    localStorage.setItem('MWYV_WATCHED_SCOPE_SPLIT_V2', 'true');
+    localStorage.setItem('MWYV_AUTO_IMPORT_PROGRESS', params.get('autoImport') || 'false');
+    if (params.get('section') === 'subscriptions') history.replaceState(null, '', '/feed/subscriptions');
+    if (failReadOnLoad) {
+      localStorage.setItem('watchedVideos', JSON.stringify({
+        entries: { 'readable-id': watchedEntries['readable-id'] },
+        index: ['readable-id']
+      }));
+    }
+  </script>
+  <script src="/src/content.js"></script>
+</body>
+</html>
