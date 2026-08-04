@@ -177,13 +177,53 @@ class WatchedPerformanceTest(unittest.TestCase):
               newEnd.id = 'end';
               newEnd.innerHTML = '<div id="buttons"></div>';
               oldEnd.replaceWith(newEnd);
-              history.pushState({}, '', '/feed/subscriptions');
               window.dispatchEvent(new Event('yt-navigate-finish'));
             }""")
             page.wait_for_function(
                 "before => (window.__MWYV_TEST_HOOK__?.counters?.headerRenders || 0) > before",
                 arg=before['headerRenders'],
                 timeout=1_000,
+            )
+            after = self.counters(page)
+            self.assertEqual(after['fullReconciliations'], before['fullReconciliations'])
+            self.assertEqual(after['fullCardScans'], before['fullCardScans'])
+            self.assertEqual(after['signalScans'], before['signalScans'])
+            self.assertEqual(
+                after['controlsOnlyReconciliations'] - before['controlsOnlyReconciliations'],
+                1,
+            )
+        finally:
+            page.close()
+            self.assertEqual(errors, [])
+
+    def test_same_url_lifecycle_burst_coalesces_without_scanning_cards(self):
+        page, errors = self.open_fixture()
+        try:
+            before = self.counters(page)
+            page.evaluate("""() => {
+              for (let index = 0; index < 5; index++) {
+                window.dispatchEvent(new Event('yt-navigate-finish'));
+                window.dispatchEvent(new Event('yt-page-data-fetched'));
+                window.dispatchEvent(new Event('popstate'));
+              }
+            }""")
+            page.wait_for_function(
+                "before => (window.__MWYV_TEST_HOOK__?.counters?.completedReconciliations || 0) > before",
+                arg=before['completedReconciliations'],
+                timeout=1_000,
+            )
+            after = self.counters(page)
+            self.assertEqual(after['fullReconciliations'], before['fullReconciliations'])
+            self.assertEqual(after['fullCardScans'], before['fullCardScans'])
+            self.assertEqual(after['signalScans'], before['signalScans'])
+            self.assertEqual(after['incrementalReconciliations'], before['incrementalReconciliations'])
+            self.assertEqual(
+                after['controlsOnlyReconciliations'] - before['controlsOnlyReconciliations'],
+                1,
+            )
+            self.assertEqual(
+                after['completedReconciliations'] - before['completedReconciliations'],
+                1,
             )
         finally:
             page.close()
@@ -291,6 +331,12 @@ class WatchedPerformanceTest(unittest.TestCase):
                 """() => Promise.all(Array.from({length: 5}, (_, index) =>
                   window.fetch(`/v1/browse?startup=${index}`)))"""
             )
+            page.evaluate("""() => {
+              for (let index = 0; index < 5; index++) {
+                window.dispatchEvent(new Event('yt-navigate-finish'));
+                window.dispatchEvent(new Event('yt-page-data-fetched'));
+              }
+            }""")
             page.wait_for_function(
                 "() => window.__MWYV_TEST_HOOK__?.counters?.historyReady === 1 && "
                 "window.__MWYV_TEST_HOOK__?.counters?.completedReconciliations >= 1",

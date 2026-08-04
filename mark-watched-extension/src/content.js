@@ -94,6 +94,7 @@
     'fullReconciliations',
     'fullFallbacks',
     'incrementalReconciliations',
+    'controlsOnlyReconciliations',
     'fullCardScans',
     'signalScans',
     'headerRenders',
@@ -1552,7 +1553,7 @@ History data size: ${JSON.stringify(watchedVideos).length} bytes\
   let reconciliationActive = false;
 
   function hasPendingReconciliation(work = pendingReconciliation) {
-    return work.full || work.roots.size > 0;
+    return work.full || work.roots.size > 0 || work.renderControls;
   }
 
   function takePendingReconciliation() {
@@ -1589,6 +1590,13 @@ History data size: ${JSON.stringify(watchedVideos).length} bytes\
     requestReconciliation(work);
   }
 
+  function requestControlsReconciliation(reason) {
+    const work = createPendingWork();
+    work.reason = reason;
+    work.renderControls = true;
+    requestReconciliation(work);
+  }
+
   async function reconcileFull(work) {
     debugCount('fullReconciliations');
     if (work.fallback) debugCount('fullFallbacks');
@@ -1600,7 +1608,6 @@ History data size: ${JSON.stringify(watchedVideos).length} bytes\
       clearGlobal: work.fallback || work.scopeChanged || work.reason === 'initial-load'
     });
     updateClassOnShortsItems();
-    if (work.renderControls) renderMWYVButtons();
   }
 
   async function reconcileIncremental(work) {
@@ -1624,7 +1631,9 @@ History data size: ${JSON.stringify(watchedVideos).length} bytes\
     reconciliationActive = true;
     try {
       if (work.full) await reconcileFull(work);
-      else await reconcileIncremental(work);
+      else if (work.roots.size) await reconcileIncremental(work);
+      else if (work.renderControls) debugCount('controlsOnlyReconciliations');
+      if (work.renderControls) renderMWYVButtons();
       debugCount('completedReconciliations');
     } finally {
       reconciliationActive = false;
@@ -1869,8 +1878,16 @@ History data size: ${JSON.stringify(watchedVideos).length} bytes\
   observeDOM(document.body, handleMutations);
   ['yt-navigate-finish', 'yt-page-data-fetched', 'popstate'].forEach(eventName => {
     addEventListener(eventName, () => {
-      if (historyLoaded && watchedVideos) lastFullReconciliationUrl = location.href;
-      requestFullReconciliation('navigation', { renderControls: true, scopeChanged: true });
+      if (!historyLoaded || !watchedVideos) {
+        doProcessPage().catch(console.error);
+        return;
+      }
+      if (lastFullReconciliationUrl !== location.href) {
+        lastFullReconciliationUrl = location.href;
+        requestFullReconciliation('navigation', { renderControls: true, scopeChanged: true });
+        return;
+      }
+      requestControlsReconciliation(`${eventName}-controls`);
     });
   });
 })();
