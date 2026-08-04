@@ -261,6 +261,49 @@ class WatchedPerformanceTest(unittest.TestCase):
             page.close()
             self.assertEqual(errors, [])
 
+    def test_list_refresh_callbacks_do_not_repeat_full_scans(self):
+        page, errors = self.open_fixture(auto_import='false')
+        try:
+            before = self.counters(page)
+            page.evaluate(
+                """() => Promise.all(Array.from({length: 5}, (_, index) =>
+                  window.fetch(`/v1/browse?refresh=${index}`)))"""
+            )
+            page.wait_for_timeout(900)
+            after = self.counters(page)
+            self.assertEqual(after['fullReconciliations'], before['fullReconciliations'])
+            self.assertEqual(after['fullCardScans'], before['fullCardScans'])
+            self.assertEqual(after['headerRenders'], before['headerRenders'])
+        finally:
+            page.close()
+            self.assertEqual(errors, [])
+
+    def test_startup_refresh_burst_shares_history_load_and_full_pass(self):
+        page = self.browser.new_page()
+        errors = []
+        page.on('pageerror', lambda error: errors.append(str(error)))
+        page.goto(
+            f'http://127.0.0.1:{self.server.server_port}/tests/performance-fixture.html?mode=hidden&autoImport=false',
+            wait_until='load',
+        )
+        try:
+            page.evaluate(
+                """() => Promise.all(Array.from({length: 5}, (_, index) =>
+                  window.fetch(`/v1/browse?startup=${index}`)))"""
+            )
+            page.wait_for_function(
+                "() => window.__MWYV_TEST_HOOK__?.counters?.historyReady === 1 && "
+                "window.__MWYV_TEST_HOOK__?.counters?.completedReconciliations >= 1",
+                timeout=2_000,
+            )
+            page.wait_for_timeout(900)
+            after = self.counters(page)
+            self.assertEqual(after['fullReconciliations'], 1)
+            self.assertEqual(after['fullCardScans'], 1)
+        finally:
+            page.close()
+            self.assertEqual(errors, [])
+
     def test_storage_write_failure_retries_without_page_error(self):
         page, errors = self.open_fixture(auto_import='true')
         try:

@@ -85,6 +85,8 @@
   let historyRetryScheduled = false;
   let historyRetryGeneration = -1;
   let lastReadableHistory = null;
+  let historyLoaded = false;
+  let historyLoadPromise = null;
   const mwTestCounters = globalThis.__MWYV_TEST_HOOK__?.counters || null;
   const DEBUG_COUNTER_DEFAULTS = [
     'scheduledReconciliations',
@@ -107,6 +109,26 @@
   function debugCount(name, amount = 1) {
     if (mwTestCounters) mwTestCounters[name] = (mwTestCounters[name] || 0) + amount;
   }
+
+  function invalidateHistoryCacheIfChanged(nextValue) {
+    const incoming = nextValue == null
+      ? null
+      : typeof nextValue === 'string' ? nextValue : JSON.stringify(nextValue);
+    const current = watchedVideos ? JSON.stringify(watchedVideos) : null;
+    if (incoming !== current) historyLoaded = false;
+  }
+
+  const storageChangeEvent = globalThis.chrome?.storage?.onChanged;
+  if (storageChangeEvent?.addListener) {
+    storageChangeEvent.addListener((changes, areaName) => {
+      if (areaName === 'local' && Object.prototype.hasOwnProperty.call(changes || {}, 'watchedVideos')) {
+        invalidateHistoryCacheIfChanged(changes.watchedVideos?.newValue);
+      }
+    });
+  }
+  addEventListener('storage', event => {
+    if (event.key === 'watchedVideos') invalidateHistoryCacheIfChanged(event.newValue);
+  });
 
   function markHistoryDirty() {
     historyGeneration += 1;
@@ -329,11 +351,7 @@
 
   const BUNDLED_IMPORT_FLAG = 'MWYV_BUNDLED_BRAVE_IMPORT_V1';
 
-  async function getHistory(a, b) {
-    if (historyDirty && watchedVideos) {
-      debugCount('historyReloadSkips');
-      return;
-    }
+  async function loadHistory(a, b) {
     console.log('getHistory started');
     a = await gmGet("watchedVideos");
     console.log('gmGet returned: ' + (a === null ? 'null' : typeof a));
@@ -370,9 +388,26 @@
     } else if (bundledImportMerged) {
       localStorage.setItem(BUNDLED_IMPORT_FLAG, 'true');
     }
+    historyLoaded = true;
   }
 
-  async function doProcessPage() {
+  function getHistory(a, b) {
+    if (historyDirty && watchedVideos) {
+      debugCount('historyReloadSkips');
+      return Promise.resolve();
+    }
+    if (historyLoaded && watchedVideos) return Promise.resolve();
+    if (!historyLoadPromise) {
+      historyLoadPromise = loadHistory(a, b).finally(() => {
+        historyLoadPromise = null;
+      });
+    }
+    return historyLoadPromise;
+  }
+
+  let lastFullReconciliationUrl = null;
+
+  async function doProcessPage({ forceFull = false } = {}) {
     console.log('doProcessPage started');
     //get list of watched videos
     await getHistory();
@@ -391,11 +426,16 @@
     //check and remember current video
     if ((vid = getVideoId(location.href)) && !watched(vid)) await addHistory(vid, now);
 
-    // Initial load, navigation, and history changes are full reconciliations.
-    requestFullReconciliation('initial-load', { renderControls: true, scopeChanged: true });
-
-    // One-shot: auto-import videos YouTube already knows are watched (delayed to let thumbnails render)
-    setTimeout(() => autoImportWatchedFromProgressBars().catch(console.error), contentLoadMarkDelay);
+    // The observer owns card additions and native signal changes. Only the
+    // first history load or a URL change needs a page-wide reconciliation;
+    // list/fetch refresh callbacks otherwise cause redundant full scans.
+    if (forceFull || lastFullReconciliationUrl !== location.href) {
+      const reason = forceFull
+        ? 'history-restore'
+        : lastFullReconciliationUrl === null ? 'initial-load' : 'navigation';
+      lastFullReconciliationUrl = location.href;
+      requestFullReconciliation(reason, { renderControls: true, scopeChanged: true });
+    }
   }
 
   function processPage() {
@@ -654,7 +694,7 @@ History data size: ${JSON.stringify(watchedVideos).length} bytes\
         } else watchedVideos = o;
         markHistoryDirty();
         a.remove();
-        enqueueHistoryWrite().then(() => doProcessPage()).catch(console.error);
+        enqueueHistoryWrite().then(() => doProcessPage({ forceFull: true })).catch(console.error);
       }
     }
     if (window.mwyvrh_ujs) return;
@@ -1829,8 +1869,8 @@ History data size: ${JSON.stringify(watchedVideos).length} bytes\
   observeDOM(document.body, handleMutations);
   ['yt-navigate-finish', 'yt-page-data-fetched', 'popstate'].forEach(eventName => {
     addEventListener(eventName, () => {
+      if (historyLoaded && watchedVideos) lastFullReconciliationUrl = location.href;
       requestFullReconciliation('navigation', { renderControls: true, scopeChanged: true });
     });
   });
-  requestFullReconciliation('initial-load', { renderControls: true, scopeChanged: true });
 })();
