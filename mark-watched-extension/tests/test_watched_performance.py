@@ -1,5 +1,6 @@
 import functools
 import http.server
+import math
 import threading
 import unittest
 from pathlib import Path
@@ -46,8 +47,10 @@ class WatchedPerformanceTest(unittest.TestCase):
             f'http://127.0.0.1:{self.server.server_port}/tests/performance-fixture.html{query}',
             wait_until='load',
         )
-        page.wait_for_function("() => window.__MWYV_TEST_HOOK__?.counters?.historyReady === 1")
-        page.wait_for_timeout(100)
+        page.wait_for_function(
+            "() => window.__MWYV_TEST_HOOK__?.counters?.historyReady === 1 && "
+            "window.__MWYV_TEST_HOOK__?.counters?.completedReconciliations >= 1"
+        )
         return page, errors
 
     @staticmethod
@@ -79,7 +82,7 @@ class WatchedPerformanceTest(unittest.TestCase):
                 )
                 latencies.append(page.evaluate("() => performance.now() - window.__burstStart"))
             after = self.counters(page)
-            p95 = sorted(latencies)[max(0, int(len(latencies) * 0.95) - 1)]
+            p95 = sorted(latencies)[max(0, math.ceil(len(latencies) * 0.95) - 1)]
             self.assertLessEqual(p95, 100, latencies)
             self.assertEqual(after['incrementalReconciliations'] - before.get('incrementalReconciliations', 0), 5)
             self.assertEqual(after['fullFallbacks'], before.get('fullFallbacks', 0))
@@ -113,6 +116,26 @@ class WatchedPerformanceTest(unittest.TestCase):
             page.close()
             self.assertEqual(errors, [])
 
+    def test_zero_progress_is_not_classified_as_watched(self):
+        page, errors = self.open_fixture(mode='hidden', auto_import='true')
+        try:
+            page.evaluate(
+                """() => document.getElementById('fixture-feed').appendChild(
+                  window.__MWYV_PERF_FIXTURE__.zeroProgressCard('zero-progress')
+                )"""
+            )
+            page.wait_for_function(
+                """() => {
+                  const card = document.getElementById('zero-progress');
+                  return card?.isConnected && getComputedStyle(card).display !== 'none' &&
+                    !card.classList.contains('watched');
+                }""",
+                timeout=1_000,
+            )
+        finally:
+            page.close()
+            self.assertEqual(errors, [])
+
     def test_dim_mode_and_route_transition_keep_controls_stable(self):
         page, errors = self.open_fixture(mode='dimmed')
         try:
@@ -138,6 +161,30 @@ class WatchedPerformanceTest(unittest.TestCase):
             )
             after_route = self.counters(page)
             self.assertGreater(after_route['headerRenders'], after_card['headerRenders'])
+        finally:
+            page.close()
+            self.assertEqual(errors, [])
+
+    def test_header_reparent_rerenders_controls(self):
+        page, errors = self.open_fixture()
+        try:
+            before = self.counters(page)
+            page.evaluate("""() => {
+              const existing = document.querySelector('.YT-HWV-BUTTONS');
+              document.body.appendChild(existing);
+              const oldEnd = document.getElementById('end');
+              const newEnd = document.createElement('div');
+              newEnd.id = 'end';
+              newEnd.innerHTML = '<div id="buttons"></div>';
+              oldEnd.replaceWith(newEnd);
+              history.pushState({}, '', '/feed/subscriptions');
+              window.dispatchEvent(new Event('yt-navigate-finish'));
+            }""")
+            page.wait_for_function(
+                "before => (window.__MWYV_TEST_HOOK__?.counters?.headerRenders || 0) > before",
+                arg=before['headerRenders'],
+                timeout=1_000,
+            )
         finally:
             page.close()
             self.assertEqual(errors, [])
@@ -170,6 +217,46 @@ class WatchedPerformanceTest(unittest.TestCase):
                 timeout=2_000,
             )
             self.assertEqual(errors, [])
+        finally:
+            page.close()
+            self.assertEqual(errors, [])
+
+    def test_lifecycle_reload_does_not_drop_pending_imports(self):
+        page, errors = self.open_fixture(auto_import='true')
+        try:
+            page.evaluate("() => window.__MWYV_PERF_FIXTURE__.controls.blockWrites = true")
+            page.evaluate(
+                """() => document.getElementById('fixture-feed').appendChild(
+                  window.__MWYV_PERF_FIXTURE__.signalCard('lifecycle-a')
+                )"""
+            )
+            page.wait_for_function("() => window.__MWYV_PERF_FIXTURE__.controls.pendingWrites.length === 1")
+            page.evaluate("() => document.dispatchEvent(new Event('yt-service-request-completed'))")
+            page.wait_for_function(
+                "() => (window.__MWYV_TEST_HOOK__?.counters?.historyReloadSkips || 0) >= 1",
+                timeout=2_000,
+            )
+            page.evaluate(
+                """() => document.getElementById('fixture-feed').appendChild(
+                  window.__MWYV_PERF_FIXTURE__.signalCard('lifecycle-b')
+                )"""
+            )
+            page.wait_for_function(
+                """() => ['lifecycle-a', 'lifecycle-b'].every(id =>
+                  document.getElementById(id)?.classList.contains('watched'))""",
+                timeout=1_000,
+            )
+            page.evaluate("""() => {
+              window.__MWYV_PERF_FIXTURE__.controls.blockWrites = false;
+              window.__MWYV_PERF_FIXTURE__.controls.releaseWrites();
+            }""")
+            page.wait_for_function(
+                """() => {
+                  const data = JSON.parse(window.__MWYV_PERF_FIXTURE__.storage.watchedVideos);
+                  return data.entries['lifecycle-a'] && data.entries['lifecycle-b'];
+                }""",
+                timeout=2_000,
+            )
         finally:
             page.close()
             self.assertEqual(errors, [])

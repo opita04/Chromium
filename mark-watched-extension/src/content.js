@@ -36,8 +36,7 @@
     } catch (_) { /* ignore localStorage quota/private-mode errors */ }
     if (globalThis.chrome?.storage?.local?.set) {
       try {
-        return Promise.resolve(chrome.storage.local.set({ [key]: value }))
-          .then(result => result);
+        return Promise.resolve(chrome.storage.local.set({ [key]: value }));
       } catch (error) {
         return Promise.reject(error);
       }
@@ -97,6 +96,7 @@
     'signalScans',
     'headerRenders',
     'hrefCacheInvalidations',
+    'historyReloadSkips',
     'historyReady'
   ];
   if (mwTestCounters) {
@@ -169,10 +169,7 @@
 
   function collectCardRoots(scope = document) {
     const roots = new Set();
-    if (scope?.nodeType === Node.ELEMENT_NODE && scope.matches(VIDEO_CARD_SELECTOR)) {
-      if (canonicalizeCardRoot(scope)) roots.add(canonicalizeCardRoot(scope));
-    }
-    scope?.querySelectorAll?.(VIDEO_CARD_SELECTOR).forEach(card => {
+    queryScope(scope, VIDEO_CARD_SELECTOR).forEach(card => {
       const root = canonicalizeCardRoot(card);
       if (root) roots.add(root);
     });
@@ -211,15 +208,6 @@
 
   function watched(vid) {
     return !!watchedVideos?.entries?.[vid];
-  }
-
-  function processVideoItems(selector) {
-    const roots = new Set();
-    document.querySelectorAll(selector).forEach(card => {
-      const root = canonicalizeCardRoot(card);
-      if (root) roots.add(root);
-    });
-    return processVideoRoots(roots);
   }
 
   function processAllVideoItems() {
@@ -333,7 +321,7 @@
       const response = await fetch(chrome.runtime.getURL('brave-watchedVideos-import.json'));
       if (!response.ok) return null;
       const text = await response.text();
-      return parseData(text) ? text : null;
+      return parseData(text);
     } catch (_) {
       return null;
     }
@@ -342,6 +330,10 @@
   const BUNDLED_IMPORT_FLAG = 'MWYV_BUNDLED_BRAVE_IMPORT_V1';
 
   async function getHistory(a, b) {
+    if (historyDirty && watchedVideos) {
+      debugCount('historyReloadSkips');
+      return;
+    }
     console.log('getHistory started');
     a = await gmGet("watchedVideos");
     console.log('gmGet returned: ' + (a === null ? 'null' : typeof a));
@@ -357,13 +349,14 @@
     // Safari temporary extensions have a fresh storage namespace. Merge the
     // bundled Brave export once so Safari starts with the same watched-video
     // state, while preserving any videos already marked in Safari.
+    let bundledImportMerged = false;
     if (localStorage.getItem(BUNDLED_IMPORT_FLAG) !== 'true') {
       const imported = await loadBundledHistoryImport();
-      if (imported && (b = parseData(imported)) && b.index.length) {
+      if (imported?.index?.length) {
         const beforeSnapshot = JSON.stringify(watchedVideos);
         const beforeCount = watchedVideos.index.length;
-        mergeData(b);
-        localStorage.setItem(BUNDLED_IMPORT_FLAG, 'true');
+        mergeData(imported);
+        bundledImportMerged = true;
         console.log(`[MWYV] Merged bundled Brave import: ${beforeCount} → ${watchedVideos.index.length} entries`);
         changed = changed || JSON.stringify(watchedVideos) !== beforeSnapshot;
       }
@@ -372,7 +365,10 @@
     lastReadableHistory = JSON.parse(JSON.stringify(watchedVideos));
     if (changed) {
       markHistoryDirty();
-      await enqueueHistoryWrite();
+      const wrote = await enqueueHistoryWrite();
+      if (wrote && bundledImportMerged) localStorage.setItem(BUNDLED_IMPORT_FLAG, 'true');
+    } else if (bundledImportMerged) {
+      localStorage.setItem(BUNDLED_IMPORT_FLAG, 'true');
     }
   }
 
@@ -813,6 +809,7 @@ History data size: ${JSON.stringify(watchedVideos).length} bytes\
     'aria-valuemax',
     'overlay-style'
   ]);
+  const OBSERVED_MUTATION_ATTRIBUTES = [...NATIVE_SIGNAL_ATTRIBUTE_NAMES];
 
   function queryScope(scope, selector) {
     const matches = [];
@@ -822,7 +819,7 @@ History data size: ${JSON.stringify(watchedVideos).length} bytes\
   }
 
   function getProgressPercent(bar) {
-    if (!bar) return 0;
+    if (!bar) return null;
     const ariaValue = Number.parseFloat(bar.getAttribute('aria-valuenow'));
     const ariaMax = Number.parseFloat(bar.getAttribute('aria-valuemax'));
     if (Number.isFinite(ariaValue)) {
@@ -849,10 +846,10 @@ History data size: ${JSON.stringify(watchedVideos).length} bytes\
       const parent = bar.parentElement;
       if (parent && parent.offsetWidth > 0) {
         const pct = Math.round((bar.offsetWidth / parent.offsetWidth) * 100);
-        if (pct > 0) return pct;
+        return pct;
       }
     } catch (_) { /* ignore */ }
-    return 0;
+    return null;
   }
 
   // Returns the VIDEO CONTAINER elements (not inner bar elements) for all YouTube-detected watched videos
@@ -889,7 +886,7 @@ History data size: ${JSON.stringify(watchedVideos).length} bytes\
       const candidates = host.querySelectorAll(
         'progress, #progress, [class*="WatchedProgressBarSegment"], [style*="width"], [aria-valuenow]'
       );
-      const percentages = [...candidates].map(getProgressPercent).filter(value => value > 0);
+      const percentages = [...candidates].map(getProgressPercent).filter(Number.isFinite);
       if (percentages.length === 0 || Math.max(...percentages) > 0) addContainer(host);
     });
 
@@ -901,15 +898,9 @@ History data size: ${JSON.stringify(watchedVideos).length} bytes\
 
   function findWatchedContainersForRoots(roots) {
     debugCount('signalScans');
-    const seen = new WeakSet();
     const results = [];
     roots.forEach(root => {
-      findWatchedContainers(root, false).forEach(container => {
-        if (!seen.has(container)) {
-          seen.add(container);
-          results.push(container);
-        }
-      });
+      results.push(...findWatchedContainers(root, false));
     });
     return results;
   }
@@ -936,31 +927,35 @@ History data size: ${JSON.stringify(watchedVideos).length} bytes\
   }
 
   async function autoImportWatchedFromProgressBars(signalRoots = null, { refresh = true } = {}) {
-    if (!getAutoImport() || !watchedVideos) return;
+    if (!getAutoImport() || !watchedVideos) return { imported: 0, importedRoots: new Set() };
     // Use the signal result supplied by the reconciliation pass when available
     // so native watched detection is not repeated for class application.
     const containers = signalRoots || findWatchedContainers();
-    let imported = 0;
+    const importedRoots = new Set();
     const now = (new Date()).valueOf();
-    for (const container of containers) {
-      const root = canonicalizeCardRoot(container) || container;
+    for (const root of containers) {
       const vid = getCachedCardVideoId(root);
       if (vid && !watched(vid)) {
         await addHistory(vid, now, true); // noSave=true, batch save after loop
-        imported++;
+        importedRoots.add(root);
       }
     }
-    if (imported > 0) {
-      await enqueueHistoryWrite();
-      console.log(`[MWYV] Auto-imported ${imported} video(s) from YouTube signals`);
+    if (importedRoots.size > 0) {
+      const writePromise = enqueueHistoryWrite();
+      console.log(`[MWYV] Auto-imported ${importedRoots.size} video(s) from YouTube signals`);
       if (refresh) {
-        // Update green outlines for newly-imported videos
-        processAllVideoItems();
-        const refreshedSignals = findWatchedContainers();
-        updateClassOnWatchedItems(refreshedSignals);
+        // Apply the in-memory result before waiting on storage so the UI does
+        // not inherit storage latency. Explicit callers can still refresh the
+        // whole page after this function resolves.
+        processVideoRoots(importedRoots);
+        const refreshedSignals = findWatchedContainersForRoots(importedRoots);
+        updateClassOnWatchedItems(refreshedSignals, { roots: importedRoots, clearGlobal: false });
+        await writePromise;
+      } else {
+        writePromise.catch(() => {});
       }
     }
-    return imported;
+    return { imported: importedRoots.size, importedRoots };
   }
 
   // --- Shorts detection ---
@@ -1154,7 +1149,7 @@ History data size: ${JSON.stringify(watchedVideos).length} bytes\
   }
 
   let lastHeaderRenderSignature = null;
-  function renderMWYVButtons({ force = false } = {}) {
+  function renderMWYVButtons() {
     // Find button area target
     const target = document.querySelector('#container #end #buttons') ||
       document.querySelector('ytd-masthead #end #buttons') ||
@@ -1169,7 +1164,8 @@ History data size: ${JSON.stringify(watchedVideos).length} bytes\
       getButtonsCollapsed(),
       Boolean(target)
     ].join('|');
-    if (!force && existingButtons && signature === lastHeaderRenderSignature) return false;
+    const targetParentChanged = target && existingButtons && existingButtons.parentNode !== target.parentNode;
+    if (existingButtons && signature === lastHeaderRenderSignature && !targetParentChanged) return false;
     lastHeaderRenderSignature = signature;
     debugCount('headerRenders');
     console.log('renderMWYVButtons called', { section, target });
@@ -1286,7 +1282,7 @@ History data size: ${JSON.stringify(watchedVideos).length} bytes\
 
   // --- Incremental mutation reconciliation ---
   const EXTENSION_OWNED_SELECTOR = '.YT-HWV-BUTTONS, .YT-HWV-BUTTON, .YT-HWV-BUTTON-SHORTS, #mwyv-settings-menu, #mwyvrh_ujs';
-  const OBSERVED_MUTATION_ATTRIBUTES = ['href', 'style', 'class', 'aria-valuenow', 'aria-valuemax', 'overlay-style'];
+  const SIGNAL_LIKE_SELECTOR = '[id], [class], [style], [aria-valuenow], [aria-valuemax], [overlay-style]';
 
   function isExtensionOwnedNode(node) {
     const element = elementFromNode(node);
@@ -1302,10 +1298,8 @@ History data size: ${JSON.stringify(watchedVideos).length} bytes\
   }
 
   function videoLinksInSubtree(node) {
-    const links = [];
-    if (node?.nodeType === Node.ELEMENT_NODE && node.matches('a[href]')) links.push(node);
-    node?.querySelectorAll?.('a[href]').forEach(link => links.push(link));
-    return links.filter(link => getVideoId(link.getAttribute('href') || link.href || ''));
+    return queryScope(node, 'a[href]')
+      .filter(link => getVideoId(link.getAttribute('href') || link.href || ''));
   }
 
   function isIncrementallyKnownLink(link, hrefOverride = null) {
@@ -1347,14 +1341,7 @@ History data size: ${JSON.stringify(watchedVideos).length} bytes\
   }
 
   function signalLikeElementsInSubtree(node) {
-    const elements = [];
-    const addIfSignalLike = element => {
-      if (element?.nodeType === Node.ELEMENT_NODE && isSignalLikeElement(element)) elements.push(element);
-    };
-    addIfSignalLike(node);
-    node?.querySelectorAll?.('[id], [class], [style], [aria-valuenow], [aria-valuemax], [overlay-style]')
-      .forEach(addIfSignalLike);
-    return elements;
+    return queryScope(node, SIGNAL_LIKE_SELECTOR).filter(isSignalLikeElement);
   }
 
   function knownSignalHostsInSubtree(node) {
@@ -1373,7 +1360,6 @@ History data size: ${JSON.stringify(watchedVideos).length} bytes\
   function createPendingWork() {
     return {
       roots: new Set(),
-      signalHosts: new Set(),
       full: false,
       fallback: false,
       reason: null,
@@ -1384,7 +1370,6 @@ History data size: ${JSON.stringify(watchedVideos).length} bytes\
 
   function mergePendingWork(target, source) {
     source.roots.forEach(root => target.roots.add(root));
-    source.signalHosts.forEach(host => target.signalHosts.add(host));
     target.full = target.full || source.full;
     target.fallback = target.fallback || source.fallback;
     target.reason = target.reason || source.reason;
@@ -1405,6 +1390,20 @@ History data size: ${JSON.stringify(watchedVideos).length} bytes\
 
   function classifyAddedNode(node, work) {
     if (!node || node.nodeType !== Node.ELEMENT_NODE || isExtensionOwnedNode(node)) return;
+    const element = elementFromNode(node);
+    const likelyRelevant = element?.matches?.(VIDEO_CARD_SELECTOR)
+      || element?.matches?.('a[href]')
+      || element?.matches?.(RESUME_PLAYBACK_SELECTOR)
+      || element?.matches?.(MODERN_PROGRESS_SELECTOR)
+      || element?.matches?.(WATCHED_BADGE_SELECTOR)
+      || element?.matches?.('[id="progress"], [aria-valuenow], [aria-valuemax], [overlay-style], [style*="width" i], [style*="progress" i], [style*="watched" i], [class*="progress" i], [class*="watched" i], [class*="thumbnail-overlay" i]')
+      || node.querySelector?.(VIDEO_CARD_SELECTOR)
+      || node.querySelector?.('a[href]')
+      || node.querySelector?.(RESUME_PLAYBACK_SELECTOR)
+      || node.querySelector?.(MODERN_PROGRESS_SELECTOR)
+      || node.querySelector?.(WATCHED_BADGE_SELECTOR)
+      || node.querySelector?.('[id="progress"], [aria-valuenow], [aria-valuemax], [overlay-style], [style*="width" i], [style*="progress" i], [style*="watched" i], [class*="progress" i], [class*="watched" i], [class*="thumbnail-overlay" i]');
+    if (!likelyRelevant) return;
     const cardRoots = collectCardRoots(node);
     const links = videoLinksInSubtree(node);
     const signalHosts = knownSignalHostsInSubtree(node);
@@ -1418,17 +1417,16 @@ History data size: ${JSON.stringify(watchedVideos).length} bytes\
 
     links.forEach(link => {
       const root = canonicalizeCardRoot(link);
+      if (root) invalidateCardIdentity(root);
       if (!isIncrementallyKnownLink(link) || !root) {
         markFullFallback(work, 'unknown-link');
         return;
       }
-      invalidateCardIdentity(root);
       addAffectedRoot(work, root);
     });
 
     cardRoots.forEach(root => addAffectedRoot(work, root));
     signalHosts.forEach(host => {
-      work.signalHosts.add(host);
       addAffectedRoot(work, canonicalizeCardRoot(host));
     });
 
@@ -1436,8 +1434,7 @@ History data size: ${JSON.stringify(watchedVideos).length} bytes\
     // it happens to be nested under a known card ancestor. This is the drift
     // guard: an ancestor alone is not evidence that the renderer is safe.
     if (links.length && !node.matches(VIDEO_CARD_SELECTOR) && !node.matches('a[href]')) {
-      const hasUnknownLink = links.some(link => !isIncrementallyKnownLink(link));
-      if (hasUnknownLink) markFullFallback(work, 'unknown-renderer');
+      markFullFallback(work, 'unknown-renderer');
     }
   }
 
@@ -1452,7 +1449,6 @@ History data size: ${JSON.stringify(watchedVideos).length} bytes\
       const host = nativeSignalHost(target);
       const root = canonicalizeCardRoot(target);
       if (host && root) {
-        work.signalHosts.add(host);
         addAffectedRoot(work, root);
       } else if (root && target === root) {
         addAffectedRoot(work, root);
@@ -1481,7 +1477,6 @@ History data size: ${JSON.stringify(watchedVideos).length} bytes\
     const host = nativeSignalHost(target);
     const root = canonicalizeCardRoot(target);
     if (host && root) {
-      work.signalHosts.add(host);
       addAffectedRoot(work, root);
     } else if (isSignalLikeElement(target)) {
       markFullFallback(work, `unknown-${attributeName}-signal`);
@@ -1496,7 +1491,12 @@ History data size: ${JSON.stringify(watchedVideos).length} bytes\
         mutation.addedNodes?.forEach(node => classifyAddedNode(node, work));
         mutation.removedNodes?.forEach(node => {
           if (node.nodeType !== Node.ELEMENT_NODE || isExtensionOwnedNode(node)) return;
-          if (collectCardRoots(node).size || videoLinksInSubtree(node).length || signalLikeElementsInSubtree(node).length) {
+          const removedNativeSignal = nativeSignalHost(node)
+            || node.matches?.(RESUME_PLAYBACK_SELECTOR)
+            || node.matches?.(MODERN_PROGRESS_SELECTOR)
+            || node.matches?.('ytd-thumbnail-overlay-time-status-renderer, .ytd-thumbnail-overlay-time-status-renderer');
+          if (collectCardRoots(node).size || videoLinksInSubtree(node).length
+            || signalLikeElementsInSubtree(node).length || removedNativeSignal) {
             markFullFallback(work, 'removed-relevant-node');
           }
         });
@@ -1552,13 +1552,9 @@ History data size: ${JSON.stringify(watchedVideos).length} bytes\
   async function reconcileFull(work) {
     debugCount('fullReconciliations');
     if (work.fallback) debugCount('fullFallbacks');
-    const roots = processAllVideoItems();
     const signalContainers = findWatchedContainers();
-    const imported = await autoImportWatchedFromProgressBars(signalContainers, { refresh: false });
-    if (imported) {
-      const importedRoots = new Set(signalContainers.map(container => canonicalizeCardRoot(container) || container));
-      processVideoRoots(importedRoots);
-    }
+    await autoImportWatchedFromProgressBars(signalContainers, { refresh: false });
+    const roots = processAllVideoItems();
     updateClassOnWatchedItems(signalContainers, {
       roots,
       clearGlobal: work.fallback || work.scopeChanged || work.reason === 'initial-load'
@@ -1576,12 +1572,11 @@ History data size: ${JSON.stringify(watchedVideos).length} bytes\
     });
     if (!roots.size) return;
     const signalContainers = findWatchedContainersForRoots(roots);
-    const imported = await autoImportWatchedFromProgressBars(signalContainers, { refresh: false });
+    await autoImportWatchedFromProgressBars(signalContainers, { refresh: false });
     // Internal history membership must be applied even when this card has no
     // native YouTube progress signal. Auto-import may add IDs during the same
     // pass, so re-reading the roots after the import keeps both paths correct.
     processVideoRoots(roots);
-    if (imported) processVideoRoots(roots);
     updateClassOnWatchedItems(signalContainers, { roots, clearGlobal: false });
   }
 

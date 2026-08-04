@@ -45,9 +45,10 @@ class WatchedHidingTest(unittest.TestCase):
             f'http://127.0.0.1:{self.server.server_port}/tests/watched-hiding-fixture.html{suffix}',
             wait_until='load',
         )
-        # The fixture's history load is deliberately asynchronous, matching the
-        # extension's real storage path and the existing test convention.
-        page.wait_for_timeout(1_200)
+        page.wait_for_function(
+            "() => window.__MWYV_TEST_HOOK__?.counters?.historyReady === 1 && "
+            "document.getElementById('recent-video')?.classList.contains('watched')"
+        )
         return page, errors
 
     @staticmethod
@@ -282,6 +283,62 @@ class WatchedHidingTest(unittest.TestCase):
             page.wait_for_function(
                 "before => (window.__MWYV_TEST_HOOK__?.counters?.fullFallbacks || 0) > before",
                 arg=before,
+                timeout=1_000,
+            )
+        finally:
+            page.close()
+            self.assert_no_page_errors(errors)
+
+    def test_known_link_inside_unknown_wrapper_uses_full_fallback(self):
+        page, errors = self.open_fixture('subscriptions')
+        try:
+            before = self.counter(page, 'fullFallbacks')
+            page.evaluate(
+                """() => {
+                  const wrapper = document.createElement('div');
+                  wrapper.className = 'unknown-video-wrapper';
+                  const link = document.createElement('a');
+                  link.id = 'thumbnail';
+                  link.href = 'https://www.youtube.com/watch?v=drift-video';
+                  wrapper.appendChild(link);
+                  document.getElementById('recent-video').appendChild(wrapper);
+                }"""
+            )
+            page.wait_for_function(
+                "before => (window.__MWYV_TEST_HOOK__?.counters?.fullFallbacks || 0) > before",
+                arg=before,
+                timeout=1_000,
+            )
+        finally:
+            page.close()
+            self.assert_no_page_errors(errors)
+
+    def test_removing_empty_native_signal_uses_full_fallback(self):
+        page, errors = self.open_fixture('subscriptions')
+        try:
+            page.evaluate("() => localStorage.setItem('MWYV_AUTO_IMPORT_PROGRESS', 'false')")
+            page.evaluate(
+                """() => {
+                  const card = window.__MWYV_FIXTURE__.legacyCard('empty-signal-removal');
+                  card.appendChild(document.createElement('yt-thumbnail-overlay-progress-bar-view-model'));
+                  document.getElementById('fixture-feed').appendChild(card);
+                }"""
+            )
+            page.wait_for_function(
+                "() => getComputedStyle(document.getElementById('empty-signal-removal')).display === 'none'",
+                timeout=1_000,
+            )
+            before = self.counter(page, 'fullFallbacks')
+            page.evaluate(
+                """() => document.querySelector('#empty-signal-removal yt-thumbnail-overlay-progress-bar-view-model').remove()"""
+            )
+            page.wait_for_function(
+                "before => (window.__MWYV_TEST_HOOK__?.counters?.fullFallbacks || 0) > before",
+                arg=before,
+                timeout=1_000,
+            )
+            page.wait_for_function(
+                "() => getComputedStyle(document.getElementById('empty-signal-removal')).display !== 'none'",
                 timeout=1_000,
             )
         finally:

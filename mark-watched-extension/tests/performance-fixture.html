@@ -61,6 +61,16 @@
         const host = document.createElement('yt-thumbnail-overlay-progress-bar-view-model');
         card.appendChild(host);
         return card;
+      },
+      zeroProgressCard(id) {
+        const card = this.legacyCard(id);
+        const host = document.createElement('yt-thumbnail-overlay-progress-bar-view-model');
+        const segment = document.createElement('div');
+        segment.setAttribute('aria-valuenow', '0');
+        segment.setAttribute('aria-valuemax', '100');
+        host.appendChild(segment);
+        card.appendChild(host);
+        return card;
       }
     };
     globalThis.chrome = {
